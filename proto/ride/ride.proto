@@ -1,1 +1,56 @@
-edition = "2023"
+edition = "2023";
+
+package ride;
+
+import "common/types.proto";
+// import path is relative to the proto root dir, assuming I set proto path to "/proto"
+
+service RideService {
+  rpc RequestRide(RequestRideRequest) returns (RequestRideResponse) {}
+
+  rpc GetRide(GetRideRequest) returns (GetRideResponse) {}
+
+  rpc UpdateRideStatus(UpdateRideStatusRequest) returns (UpdateRideStatusResponse) {}
+}
+
+message Ride {
+  string id = 1;
+  string rider_id = 2;
+  string driver_id = 3;
+  RideStatus ride_status = 4;
+  //   Coordinates pick_up = ;
+  //   Coordinates drop_off = ;
+
+  uint32 requested_at = 11;
+  uint32 matching_at = 12;
+  uint32 matched_at = 13;
+  uint32 accepted_at = 14;
+}
+
+message RequestRideRequest {
+  string idempotency_key = 1;
+  string rider_id = 2;
+  //   Coordinates pick_up = 3;
+  //   Coordinates drop_off = 4;
+}
+
+message RequestRideResponse {
+  Ride ride = 1;
+}
+
+message GetRideRequest {
+  string ride_id = 1;
+}
+
+message GetRideResponse {
+  Ride ride = 1;
+}
+
+message UpdateRideStatus {
+  string ride_id = 1;
+  RideStatus ride_status = 2;
+}
+
+message UpdateRideStatusResponse {
+  Ride ride = 1;
+}

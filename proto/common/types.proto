@@ -1,0 +1,21 @@
+edition = "2023";
+
+package common;
+
+message Coordinates {
+  double latitude = 1;
+  double longitude = 2;
+}
+
+// Even if unimplemented, make sure these are as granular as possible to avoid silent fails
+enum RideStatus {
+  RIDE_STATUS_UNSPECIFIED = 0;
+  RIDE_STATUS_REQUESTED = 1; // Rider requested and is awaiting matching
+  RIDE_STATUS_MATCHING = 2; // Requested-Matching are split to account for failures
+  RIDE_STATUS_MATCHED = 3; // Driver matched, awaiting acceptance (10s TTL)
+  RIDE_STATUS_ACCEPTED = 4; // Driver accepted. Implicit: en route to pickup, so stream driver location
+  RIDE_STATUS_IN_PROGRESS = 5; // Rider picked up
+  RIDE_STATUS_COMPLETED = 6;
+  RIDE_STATUS_CANCELLED = 7;
+  RIDE_STATUS_FAILED = 8;
+}
