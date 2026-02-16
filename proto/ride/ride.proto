@@ -2,7 +2,10 @@ edition = "2023";
 
 package ride;
 
-import "common/types.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "./";
+// import "common/types.proto";
 // import path is relative to the proto root dir, assuming I set proto path to "/proto"
 
 service RideService {
@@ -21,10 +24,10 @@ message Ride {
   //   Coordinates pick_up = ;
   //   Coordinates drop_off = ;
 
-  uint32 requested_at = 11;
-  uint32 matching_at = 12;
-  uint32 matched_at = 13;
-  uint32 accepted_at = 14;
+  google.protobuf.Timestamp requested_at = 11;
+  google.protobuf.Timestamp matching_at = 12;
+  google.protobuf.Timestamp matched_at = 13;
+  google.protobuf.Timestamp accepted_at = 14;
 }
 
 message RequestRideRequest {
@@ -46,11 +49,25 @@ message GetRideResponse {
   Ride ride = 1;
 }
 
-message UpdateRideStatus {
-  string ride_id = 1;
-  RideStatus ride_status = 2;
+message UpdateRideStatusRequest {
+  string idempotency_key = 1;
+  string ride_id = 2;
+  RideStatus ride_status = 3;
 }
 
 message UpdateRideStatusResponse {
   Ride ride = 1;
+}
+
+// Even if unimplemented, make sure these are as granular as possible to avoid silent fails
+enum RideStatus {
+  RIDE_STATUS_UNSPECIFIED = 0;
+  RIDE_STATUS_REQUESTED = 1; // Rider requested and is awaiting matching
+  RIDE_STATUS_MATCHING = 2; // Requested-Matching are split to account for failures
+  RIDE_STATUS_MATCHED = 3; // Driver matched, awaiting acceptance (10s TTL)
+  RIDE_STATUS_ACCEPTED = 4; // Driver accepted. Implicit: en route to pickup, so stream driver location
+  RIDE_STATUS_IN_PROGRESS = 5; // Rider picked up
+  RIDE_STATUS_COMPLETED = 6;
+  RIDE_STATUS_CANCELLED = 7;
+  RIDE_STATUS_FAILED = 8;
 }
