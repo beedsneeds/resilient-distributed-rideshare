@@ -23,6 +23,7 @@ message Ride {
   RideStatus ride_status = 4;
   //   Coordinates pick_up = ;
   //   Coordinates drop_off = ;
+  // No restrictions on field numbers 5 to 10, haven't used it
 
   google.protobuf.Timestamp requested_at = 11;
   google.protobuf.Timestamp matching_at = 12;
