@@ -13,9 +13,11 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 USER vscode
 # RUN go get -x <your-dependency-or-tool>
 
-RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@latest \
+RUN go env -w GOPROXY=https://proxy.golang.org,direct \
+    && go install google.golang.org/protobuf/cmd/protoc-gen-go@latest \
     && go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest \
     && go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
+
 ENV PATH="$PATH:$(go env GOPATH)/bin"
 # idk if expansion like this works
 USER root
