@@ -31,6 +31,6 @@ COPY proto/ proto/
 
 RUN go build -o /usr/local/bin/rider .
 
-EXPOSE 50051
+EXPOSE 50052
 
 CMD ["/usr/local/bin/rider"]

@@ -43,13 +43,13 @@ services:
       - .env
     environment:
       - SERVICE_NAME=rider-service
-      - GRPC_PORT=50051
+      - GRPC_PORT=50052
       - DB_HOST=rider-db
       - DB_PORT=5432
       - DB_NAME=rider_db
       - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@rider-db:5432/rider_db
     ports:
-      - "50051:50051"
+      - "50052:50052"
     depends_on:
       rider-db:
         condition: service_healthy
@@ -76,7 +76,7 @@ services:
       # seed
       - ../services/rider/data/seed/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
     ports:
-      - "5433:5432"
+      - "5434:5432"
     networks:
       - rideshare-network
 
@@ -94,14 +94,14 @@ services:
       - .env
     environment:
       - SERVICE_NAME=ride-service
-      - GRPC_PORT=50052
+      - GRPC_PORT=50051
       - DB_HOST=ride-db
       - DB_PORT=5432
       - DB_NAME=ride_db
-      - RIDER_SERVICE_ADDR=rider-service:50051
+      - RIDER_SERVICE_ADDR=rider-service:50052
       - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ride-db:5432/ride_db
     ports:
-      - "50052:50052"
+      - "50051:50051"
     depends_on:
       ride-db:
         condition: service_healthy
@@ -130,7 +130,7 @@ services:
       # seed
       - ../services/ride/data/seed/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
     ports:
-      - "5434:5432"
+      - "5433:5432"
     networks:
       - rideshare-network
 

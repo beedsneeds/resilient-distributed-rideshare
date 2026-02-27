@@ -6,6 +6,12 @@
 SELECT * FROM driver
 WHERE id = $1 LIMIT 1;
 
+-- name: GetRandomAvailableDriver :one
+SELECT * FROM driver
+WHERE status = 'available'
+ORDER BY RANDOM()
+LIMIT 1;
+
 -- name: ListDrivers :many
 SELECT * FROM driver
 ORDER BY name;

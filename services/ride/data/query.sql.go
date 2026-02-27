@@ -93,6 +93,20 @@ func (q *Queries) GetDriver(ctx context.Context, id pgtype.UUID) (Driver, error)
 	return i, err
 }
 
+const getRandomAvailableDriver = `-- name: GetRandomAvailableDriver :one
+SELECT id, name, status FROM driver
+WHERE status = 'available'
+ORDER BY RANDOM()
+LIMIT 1
+`
+
+func (q *Queries) GetRandomAvailableDriver(ctx context.Context) (Driver, error) {
+	row := q.db.QueryRow(ctx, getRandomAvailableDriver)
+	var i Driver
+	err := row.Scan(&i.ID, &i.Name, &i.Status)
+	return i, err
+}
+
 const getRide = `-- name: GetRide :one
 /* 
 * Ride
