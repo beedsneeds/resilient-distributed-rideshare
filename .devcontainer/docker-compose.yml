@@ -47,6 +47,7 @@ services:
       - DB_HOST=rider-db
       - DB_PORT=5432
       - DB_NAME=rider_db
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@rider-db:5432/rider_db
     ports:
       - "50051:50051"
     depends_on:
@@ -98,6 +99,7 @@ services:
       - DB_PORT=5432
       - DB_NAME=ride_db
       - RIDER_SERVICE_ADDR=rider-service:50051
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ride-db:5432/ride_db
     ports:
       - "50052:50052"
     depends_on:

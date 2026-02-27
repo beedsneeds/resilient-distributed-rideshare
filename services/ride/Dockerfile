@@ -24,7 +24,7 @@ WORKDIR /app
 
 COPY services/ride/go.mod ./
 COPY services/ride/go.sum* ./
-RUN go mod download
+RUN go mod download && chmod -R g+w /go/pkg/mod/cache
 
 COPY services/ride/ .
 COPY proto/ proto/
