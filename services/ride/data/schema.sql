@@ -16,10 +16,6 @@ CREATE TYPE driverstatus AS ENUM(
     'busy'
 );
 
-CREATE TABLE rider (
-    id      UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
-    name    VARCHAR(50)     NOT NULL
-);
 
 CREATE TABLE driver (
     id      UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -31,7 +27,7 @@ CREATE TABLE ride(
     id          UUID   PRIMARY KEY DEFAULT gen_random_uuid(),
     -- the above default is a fallback. I want to generate from the server alongside idempotency key
     -- ofc no idempotency required for rider/driver
-    rider_id    UUID    NOT NULL    REFERENCES rider(id),
+    rider_id    UUID    NOT NULL, -- should I add a default here?
     driver_id   UUID         REFERENCES driver(id),
     ride_status ridestatus  NOT NULL    DEFAULT 'requested',
 

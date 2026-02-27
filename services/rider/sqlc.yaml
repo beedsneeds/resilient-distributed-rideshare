@@ -1,0 +1,10 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries: "./data/query.sql"
+    schema: "./data/schema.sql"
+    gen:
+      go:
+        package: "riderdata"
+        out: "./data/"
+        sql_package: "pgx/v5"

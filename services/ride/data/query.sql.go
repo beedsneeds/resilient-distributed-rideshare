@@ -57,22 +57,6 @@ func (q *Queries) CreateRide(ctx context.Context, arg CreateRideParams) (Ride, e
 	return i, err
 }
 
-const createRider = `-- name: CreateRider :one
-INSERT INTO rider (
-    name
-) VALUES (
-  $1
-)
-RETURNING id, name
-`
-
-func (q *Queries) CreateRider(ctx context.Context, name string) (Rider, error) {
-	row := q.db.QueryRow(ctx, createRider, name)
-	var i Rider
-	err := row.Scan(&i.ID, &i.Name)
-	return i, err
-}
-
 const deleteDriver = `-- name: DeleteDriver :exec
 DELETE FROM driver
 WHERE id = $1
@@ -90,16 +74,6 @@ WHERE id = $1
 
 func (q *Queries) DeleteRide(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteRide, id)
-	return err
-}
-
-const deleteRider = `-- name: DeleteRider :exec
-DELETE FROM rider 
-WHERE id = $1
-`
-
-func (q *Queries) DeleteRider(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteRider, id)
 	return err
 }
 
@@ -144,22 +118,6 @@ func (q *Queries) GetRide(ctx context.Context, id pgtype.UUID) (Ride, error) {
 	return i, err
 }
 
-const getRider = `-- name: GetRider :one
-/* 
-* Rider
-*/ 
-
-SELECT id, name FROM rider
-WHERE id = $1 LIMIT 1
-`
-
-func (q *Queries) GetRider(ctx context.Context, id pgtype.UUID) (Rider, error) {
-	row := q.db.QueryRow(ctx, getRider, id)
-	var i Rider
-	err := row.Scan(&i.ID, &i.Name)
-	return i, err
-}
-
 const listDrivers = `-- name: ListDrivers :many
 SELECT id, name, status FROM driver
 ORDER BY name
@@ -175,31 +133,6 @@ func (q *Queries) ListDrivers(ctx context.Context) ([]Driver, error) {
 	for rows.Next() {
 		var i Driver
 		if err := rows.Scan(&i.ID, &i.Name, &i.Status); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listRiders = `-- name: ListRiders :many
-SELECT id, name FROM rider
-ORDER BY name
-`
-
-func (q *Queries) ListRiders(ctx context.Context) ([]Rider, error) {
-	rows, err := q.db.Query(ctx, listRiders)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Rider
-	for rows.Next() {
-		var i Rider
-		if err := rows.Scan(&i.ID, &i.Name); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

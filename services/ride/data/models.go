@@ -119,8 +119,3 @@ type Ride struct {
 	MatchedAt   pgtype.Timestamp
 	AcceptedAt  pgtype.Timestamp
 }
-
-type Rider struct {
-	ID   pgtype.UUID
-	Name string
-}
