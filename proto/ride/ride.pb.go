@@ -4,7 +4,7 @@
 // 	protoc        v6.33.5
 // source: ride.proto
 
-package __
+package ride
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -530,7 +530,7 @@ const file_ride_proto_rawDesc = "" +
 	"\vRideService\x12D\n" +
 	"\vRequestRide\x12\x18.ride.RequestRideRequest\x1a\x19.ride.RequestRideResponse\"\x00\x128\n" +
 	"\aGetRide\x12\x14.ride.GetRideRequest\x1a\x15.ride.GetRideResponse\"\x00\x12S\n" +
-	"\x10UpdateRideStatus\x12\x1d.ride.UpdateRideStatusRequest\x1a\x1e.ride.UpdateRideStatusResponse\"\x00B\x04Z\x02./b\beditionsp\xe8\a"
+	"\x10UpdateRideStatus\x12\x1d.ride.UpdateRideStatusRequest\x1a\x1e.ride.UpdateRideStatusResponse\"\x00BBZ@github.com/beedsneeds/resilient-distributed-rideshare/proto/rideb\beditionsp\xe8\a"
 
 var (
 	file_ride_proto_rawDescOnce sync.Once

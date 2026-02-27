@@ -4,7 +4,7 @@
 // - protoc             v6.33.5
 // source: ride.proto
 
-package __
+package ride
 
 import (
 	context "context"

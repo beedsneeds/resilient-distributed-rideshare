@@ -4,7 +4,7 @@ package ride;
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "./";
+option go_package = "github.com/beedsneeds/resilient-distributed-rideshare/proto/ride";
 // import "common/types.proto";
 // import path is relative to the proto root dir, assuming I set proto path to "/proto"
 
