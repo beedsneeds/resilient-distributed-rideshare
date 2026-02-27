@@ -28,3 +28,4 @@ go.work.sum
 /services/grpc-go
 /hello
 
+/.claude

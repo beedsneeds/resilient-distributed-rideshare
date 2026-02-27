@@ -5,7 +5,7 @@
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
 	// "image": "mcr.microsoft.com/devcontainers/go:2-1.25-trixie"
 	"dockerComposeFile": "docker-compose.yml",
-	"service": "app",
+	"service": "ride-service",
 	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
 
 
