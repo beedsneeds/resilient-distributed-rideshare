@@ -16,21 +16,21 @@ import (
 )
 
 var (
-	serverAddr = flag.String("addr", "ride-service:50051", "The server address in the format of host:port")
+	serverAddr = flag.String("addr", "localhost:50051", "The server address in the format of host:port")
 )
 
 func requestRide(client ridepb.RideServiceClient, riderID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := client.RequestRide(ctx, &ridepb.RequestRideRequest{
+	ride, err := client.RequestRide(ctx, &ridepb.RequestRideRequest{
 		IdempotencyKey: &riderID,
 		RiderId:        &riderID,
 	})
 	if err != nil {
 		return fmt.Errorf("RequestRide failed: %w", err)
 	}
-	// r := ride.Ride
-	// log.Printf("Ride ID: %s", *r.Id)
+	r := ride.Ride
+	log.Printf("Ride ID: %s", *r.Id)
 
 	return nil
 }

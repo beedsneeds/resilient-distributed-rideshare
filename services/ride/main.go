@@ -111,6 +111,7 @@ func main() {
 	defer dbconn.Close(context.Background())
 
 	ridepb.RegisterRideServiceServer(grpcServer, rideServer)
+	log.Printf("ride-service listening on port %d", *port)
 	grpcServer.Serve(lis)
 
 }

@@ -7,27 +7,23 @@ networks:
   rideshare-network:
     driver: bridge
 
-# TODO: for prod, use go's lean base images not devcontainer image
-# Remove all dev stuff like protoc
-# remove ride service's sleep infty and volumes
 
 services:
-  # app:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   env_file:
-  #       # Ensure that the variables in .env match the same variables in devcontainer.json
-  #       - .env
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # env_file:
+        # Ensure that the variables in .env match the same variables in devcontainer.json
+        # - .env
+    volumes:
+      - ../..:/workspaces:cached
+    # Overrides default command so things don't shut down after the process ends.
+    command: sleep infinity
 
-  #   volumes:
-  #     - ../..:/workspaces:cached
-
-  #   # Overrides default command so things don't shut down after the process ends.
-  #   command: sleep infinity
-
-  #   # Runs app on the same network as the database container, allows "forwardPorts" in devcontainer.json function.
-  #   network_mode: service:db
+    # Runs app on the same network as the database container, allows "forwardPorts" in devcontainer.json function.
+    networks: 
+      - rideshare-network
 
   # Use "forwardPorts" in **devcontainer.json** to forward an app port locally.
   # (Adding the "ports" property to this file will not forward from a Codespace.)
@@ -35,61 +31,15 @@ services:
   # Add "forwardPorts": ["5432"] to **devcontainer.json** to forward PostgreSQL locally.
   # (Adding the "ports" property to this file will not forward from a Codespace.)
 
-  rider-service:
-    build:
-      context: ..
-      dockerfile: services/rider/Dockerfile
-    env_file:
-      - .env
-    environment:
-      - SERVICE_NAME=rider-service
-      - GRPC_PORT=50052
-      - DB_HOST=rider-db
-      - DB_PORT=5432
-      - DB_NAME=rider_db
-      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@rider-db:5432/rider_db
-    ports:
-      - "50052:50052"
-    depends_on:
-      rider-db:
-        condition: service_healthy
-    networks:
-      - rideshare-network
-    restart: "no" # Don't auto-restart during crash testing
 
-  rider-db:
-    image: postgres:latest
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: rider_db
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d rider_db"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    volumes:
-      - rider-postgres-data:/var/lib/postgresql/
-      # create tables
-      - ../services/rider/data/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
-      # seed
-      - ../services/rider/data/seed/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
-    ports:
-      - "5434:5432"
-    networks:
-      - rideshare-network
 
   # ============================================
-  # RIDE SERVICE
+  # SERVICES
   # ============================================
   ride-service:
     build:
       context: ..
       dockerfile: services/ride/Dockerfile
-    command: sleep infinity
-    volumes:
-      - ../..:/workspaces:cached
     env_file:
       - .env
     environment:
@@ -105,8 +55,6 @@ services:
     depends_on:
       ride-db:
         condition: service_healthy
-      rider-service:
-        condition: service_started
     networks:
       - rideshare-network
     restart: "no"
@@ -131,6 +79,55 @@ services:
       - ../services/ride/data/seed/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
     ports:
       - "5433:5432"
+    networks:
+      - rideshare-network
+
+
+
+  rider-service:
+    build:
+      context: ..
+      dockerfile: services/rider/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - SERVICE_NAME=rider-service
+      - GRPC_PORT=50052
+      - DB_HOST=rider-db
+      - DB_PORT=5432
+      - DB_NAME=rider_db
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@rider-db:5432/rider_db
+    ports:
+      - "50052:50052"
+    depends_on:
+      rider-db:
+        condition: service_healthy
+      ride-service:
+        condition: service_started
+    networks:
+      - rideshare-network
+    restart: "no" # Don't auto-restart during crash testing
+
+  rider-db:
+    image: postgres:latest
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rider_db
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d rider_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - rider-postgres-data:/var/lib/postgresql/
+      # create tables
+      - ../services/rider/data/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      # seed
+      - ../services/rider/data/seed/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
+    ports:
+      - "5434:5432"
     networks:
       - rideshare-network
 
