@@ -2,6 +2,8 @@ volumes:
   rider-postgres-data:
   ride-postgres-data:
   pgadmin-data:
+  redis-data:
+  redisinsight-data:
 
 networks:
   rideshare-network:
@@ -23,14 +25,14 @@ services:
 
     # Runs app on the same network as the database container, allows "forwardPorts" in devcontainer.json function.
     networks: 
-      - rideshare-network
+      - rideshare-network    
 
   # Use "forwardPorts" in **devcontainer.json** to forward an app port locally.
   # (Adding the "ports" property to this file will not forward from a Codespace.)
 
   # Add "forwardPorts": ["5432"] to **devcontainer.json** to forward PostgreSQL locally.
   # (Adding the "ports" property to this file will not forward from a Codespace.)
-
+    : 
 
 
   # ============================================
@@ -128,6 +130,26 @@ services:
       - ../services/rider/data/seed/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
     ports:
       - "5434:5432"
+    networks:
+      - rideshare-network
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - rideshare-network
+
+  redisinsight:
+    image: redis/redisinsight:latest
+    ports:
+      - "5540:5540"
+    volumes:
+      - redisinsight-data:/data
+    depends_on:
+      - redis
     networks:
       - rideshare-network
 

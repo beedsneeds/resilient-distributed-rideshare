@@ -8,7 +8,7 @@ import (
 	"time"
 
 	ridepb "github.com/beedsneeds/resilient-distributed-rideshare/proto/ride"
-	riderdata "github.com/beedsneeds/resilient-distributed-rideshare/services/rider/data"
+	"github.com/beedsneeds/resilient-distributed-rideshare/services/rider/data"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/grpc"
@@ -49,14 +49,14 @@ func main() {
 	client := ridepb.NewRideServiceClient(conn)
 
 	databaseURL := "postgres://postgres:postgres@rider-db:5432/rider_db"
-	dbconn, err := pgx.Connect(context.Background(), databaseURL)
-	// dbconn, err := pgx.Connect(context.Background(), os.Getenv("DATABASE_URL"))
+	pgconn, err := pgx.Connect(context.Background(), databaseURL)
+	// pgconn, err := pgx.Connect(context.Background(), os.Getenv("DATABASE_URL"))
 	if err != nil {
 		log.Fatalf("unable to connect to database: %v", err)
 	}
-	defer dbconn.Close(context.Background())
+	defer pgconn.Close(context.Background())
 
-	queries := riderdata.New(dbconn)
+	queries := riderdata.New(pgconn)
 
 	for i := 0; i < 10; i++ {
 		delay := i * 300

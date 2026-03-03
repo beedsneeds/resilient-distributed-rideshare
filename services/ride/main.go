@@ -10,10 +10,11 @@ import (
 	// "os"
 
 	ridepb "github.com/beedsneeds/resilient-distributed-rideshare/proto/ride"
-	ridedata "github.com/beedsneeds/resilient-distributed-rideshare/services/ride/data"
+	"github.com/beedsneeds/resilient-distributed-rideshare/services/ride/data"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -27,7 +28,8 @@ var (
 type rideServiceServer struct {
 	ridepb.UnimplementedRideServiceServer
 	// shared connection pool
-	queries *ridedata.Queries
+	queries  *ridedata.Queries
+	messages *redis.Client
 }
 
 func sqlcRidetoProtoRide(r ridedata.Ride) *ridepb.Ride {
@@ -62,12 +64,6 @@ func sqlcRidetoProtoRide(r ridedata.Ride) *ridepb.Ride {
 }
 
 func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.RequestRideRequest) (*ridepb.RequestRideResponse, error) {
-	driver, err := s.queries.GetRandomAvailableDriver(ctx)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "query failed: %v", err)
-	}
-	log.Printf("Driver: %v\n", driver)
-
 	newRideID := uuid.New()
 
 	riderID, err := uuid.Parse(request.GetRiderId())
@@ -83,19 +79,36 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 		log.Fatalf("CreateRide failed: %v", err)
 	}
 
+	xargs := redis.XAddArgs{
+		Stream: "ride.requested",
+		ID:     "*",
+		Values: []string{"rideID", newRideID.String()},
+		// TODO idempotency with IDMP
+	}
+	rdserr := s.messages.XAdd(ctx, &xargs).Err()
+	if rdserr != nil {
+		log.Fatalf("Redis Failed: %v", err)
+	}
+
 	return &ridepb.RequestRideResponse{
 		Ride: sqlcRidetoProtoRide(newRide),
 	}, nil
 }
 
-func newServer() (*rideServiceServer, *pgx.Conn) {
+func newServer() (*rideServiceServer, *pgx.Conn, *redis.Client) {
 	databaseURL := "postgres://postgres:postgres@ride-db:5432/ride_db"
-	dbconn, err := pgx.Connect(context.Background(), databaseURL)
-	// dbconn, err := pgx.Connect(context.Background(), os.Getenv("DATABASE_URL"))
+	pgconn, err := pgx.Connect(context.Background(), databaseURL)
+	// pgconn, err := pgx.Connect(context.Background(), os.Getenv("DATABASE_URL"))
 	if err != nil {
 		log.Fatalf("unable to connect to database: %v", err)
 	}
-	return &rideServiceServer{queries: ridedata.New(dbconn)}, dbconn
+	rdsconn := redis.NewClient(&redis.Options{
+		Addr:     "redis:6379",
+		Password: "",
+		DB:       0,
+	})
+
+	return &rideServiceServer{queries: ridedata.New(pgconn), messages: rdsconn}, pgconn, rdsconn
 }
 
 func main() {
@@ -107,8 +120,9 @@ func main() {
 	// https://github.com/grpc/grpc-go/blob/master/examples/route_guide/server/server.go#L123
 	var opts []grpc.ServerOption
 	grpcServer := grpc.NewServer(opts...)
-	rideServer, dbconn := newServer()
-	defer dbconn.Close(context.Background())
+	rideServer, pgconn, rdsconn := newServer()
+	defer pgconn.Close(context.Background())
+	defer rdsconn.Close()
 
 	ridepb.RegisterRideServiceServer(grpcServer, rideServer)
 	log.Printf("ride-service listening on port %d", *port)
