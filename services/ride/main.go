@@ -7,8 +7,6 @@ import (
 	"log"
 	"net"
 
-	// "os"
-
 	ridepb "github.com/beedsneeds/resilient-distributed-rideshare/proto/ride"
 	"github.com/beedsneeds/resilient-distributed-rideshare/services/ride/data"
 	"github.com/google/uuid"
@@ -32,18 +30,20 @@ type rideServiceServer struct {
 	messages *redis.Client
 }
 
+var rideStatusToProto = map[ridedata.Ridestatus]ridepb.RideStatus{
+	ridedata.RidestatusUnspecified: ridepb.RideStatus_RIDE_STATUS_UNSPECIFIED,
+	ridedata.RidestatusRequested:   ridepb.RideStatus_RIDE_STATUS_REQUESTED,
+	ridedata.RidestatusMatching:    ridepb.RideStatus_RIDE_STATUS_MATCHING,
+	ridedata.RidestatusMatched:     ridepb.RideStatus_RIDE_STATUS_MATCHED,
+	ridedata.RidestatusAccepted:    ridepb.RideStatus_RIDE_STATUS_ACCEPTED,
+	ridedata.RidestatusInProgress:  ridepb.RideStatus_RIDE_STATUS_IN_PROGRESS,
+	ridedata.RidestatusCompleted:   ridepb.RideStatus_RIDE_STATUS_COMPLETED,
+	ridedata.RidestatusCancelled:   ridepb.RideStatus_RIDE_STATUS_CANCELLED,
+	ridedata.RidestatusFailed:      ridepb.RideStatus_RIDE_STATUS_FAILED,
+}
+
 func sqlcRidetoProtoRide(r ridedata.Ride) *ridepb.Ride {
-	var rideStatusToProto = map[ridedata.Ridestatus]ridepb.RideStatus{
-		ridedata.RidestatusUnspecified: ridepb.RideStatus_RIDE_STATUS_UNSPECIFIED,
-		ridedata.RidestatusRequested:   ridepb.RideStatus_RIDE_STATUS_REQUESTED,
-		ridedata.RidestatusMatching:    ridepb.RideStatus_RIDE_STATUS_MATCHING,
-		ridedata.RidestatusMatched:     ridepb.RideStatus_RIDE_STATUS_MATCHED,
-		ridedata.RidestatusAccepted:    ridepb.RideStatus_RIDE_STATUS_ACCEPTED,
-		ridedata.RidestatusInProgress:  ridepb.RideStatus_RIDE_STATUS_IN_PROGRESS,
-		ridedata.RidestatusCompleted:   ridepb.RideStatus_RIDE_STATUS_COMPLETED,
-		ridedata.RidestatusCancelled:   ridepb.RideStatus_RIDE_STATUS_CANCELLED,
-		ridedata.RidestatusFailed:      ridepb.RideStatus_RIDE_STATUS_FAILED,
-	}
+
 	var requestedAt *timestamppb.Timestamp
 	if r.RequestedAt.Valid {
 		requestedAt = timestamppb.New(r.RequestedAt.Time)
@@ -52,13 +52,13 @@ func sqlcRidetoProtoRide(r ridedata.Ride) *ridepb.Ride {
 	rideIDStr := uuid.UUID(r.ID.Bytes).String()
 	riderIDstr := uuid.UUID(r.RiderID.Bytes).String()
 	driverIDstr := uuid.UUID(r.DriverID.Bytes).String()
-	status := rideStatusToProto[r.RideStatus]
+	rideStatus := rideStatusToProto[r.RideStatus]
 
 	return &ridepb.Ride{
 		Id:          &rideIDStr,
 		RiderId:     &riderIDstr,
 		DriverId:    &driverIDstr,
-		RideStatus:  &status,
+		RideStatus:  &rideStatus,
 		RequestedAt: requestedAt,
 	}
 }
@@ -76,7 +76,7 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 		RiderID: pgtype.UUID{Bytes: riderID, Valid: true},
 	})
 	if err != nil {
-		log.Fatalf("CreateRide failed: %v", err)
+		return nil, status.Errorf(codes.Internal, "CreateRide failed: %v", err)
 	}
 
 	xargs := redis.XAddArgs{
@@ -85,9 +85,9 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 		Values: []string{"rideID", newRideID.String()},
 		// TODO idempotency with IDMP
 	}
-	rdserr := s.messages.XAdd(ctx, &xargs).Err()
-	if rdserr != nil {
-		log.Fatalf("Redis Failed: %v", err)
+	err = s.messages.XAdd(ctx, &xargs).Err()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to publish ride event: %v", err)
 	}
 
 	return &ridepb.RequestRideResponse{
@@ -97,6 +97,7 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 
 func newServer() (*rideServiceServer, *pgx.Conn, *redis.Client) {
 	databaseURL := "postgres://postgres:postgres@ride-db:5432/ride_db"
+	// TODO use pgpool for a connection pool when handling multiple requests
 	pgconn, err := pgx.Connect(context.Background(), databaseURL)
 	// pgconn, err := pgx.Connect(context.Background(), os.Getenv("DATABASE_URL"))
 	if err != nil {
@@ -126,6 +127,9 @@ func main() {
 
 	ridepb.RegisterRideServiceServer(grpcServer, rideServer)
 	log.Printf("ride-service listening on port %d", *port)
-	grpcServer.Serve(lis)
+	err = grpcServer.Serve(lis)
+	if err != nil {
+		log.Fatalf("failed to listen: %v", err)
+	}
 
 }
