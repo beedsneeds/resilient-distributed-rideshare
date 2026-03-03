@@ -11,49 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type Driverstatus string
-
-const (
-	DriverstatusAvailable Driverstatus = "available"
-	DriverstatusOffline   Driverstatus = "offline"
-	DriverstatusBusy      Driverstatus = "busy"
-)
-
-func (e *Driverstatus) Scan(src interface{}) error {
-	switch s := src.(type) {
-	case []byte:
-		*e = Driverstatus(s)
-	case string:
-		*e = Driverstatus(s)
-	default:
-		return fmt.Errorf("unsupported scan type for Driverstatus: %T", src)
-	}
-	return nil
-}
-
-type NullDriverstatus struct {
-	Driverstatus Driverstatus
-	Valid        bool // Valid is true if Driverstatus is not NULL
-}
-
-// Scan implements the Scanner interface.
-func (ns *NullDriverstatus) Scan(value interface{}) error {
-	if value == nil {
-		ns.Driverstatus, ns.Valid = "", false
-		return nil
-	}
-	ns.Valid = true
-	return ns.Driverstatus.Scan(value)
-}
-
-// Value implements the driver Valuer interface.
-func (ns NullDriverstatus) Value() (driver.Value, error) {
-	if !ns.Valid {
-		return nil, nil
-	}
-	return string(ns.Driverstatus), nil
-}
-
 type Ridestatus string
 
 const (
@@ -101,12 +58,6 @@ func (ns NullRidestatus) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.Ridestatus), nil
-}
-
-type Driver struct {
-	ID     pgtype.UUID
-	Name   string
-	Status Driverstatus
 }
 
 type Ride struct {

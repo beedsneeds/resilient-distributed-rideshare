@@ -11,22 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const createDriver = `-- name: CreateDriver :one
-INSERT INTO driver (
-    name
-) VALUES (
-  $1
-)
-RETURNING id, name, status
-`
-
-func (q *Queries) CreateDriver(ctx context.Context, name string) (Driver, error) {
-	row := q.db.QueryRow(ctx, createDriver, name)
-	var i Driver
-	err := row.Scan(&i.ID, &i.Name, &i.Status)
-	return i, err
-}
-
 const createRide = `-- name: CreateRide :one
 INSERT INTO ride (
   id, rider_id
@@ -57,16 +41,6 @@ func (q *Queries) CreateRide(ctx context.Context, arg CreateRideParams) (Ride, e
 	return i, err
 }
 
-const deleteDriver = `-- name: DeleteDriver :exec
-DELETE FROM driver
-WHERE id = $1
-`
-
-func (q *Queries) DeleteDriver(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteDriver, id)
-	return err
-}
-
 const deleteRide = `-- name: DeleteRide :exec
 DELETE FROM ride
 WHERE id = $1
@@ -75,36 +49,6 @@ WHERE id = $1
 func (q *Queries) DeleteRide(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteRide, id)
 	return err
-}
-
-const getDriver = `-- name: GetDriver :one
-/* 
-* Driver
-*/ 
-
-SELECT id, name, status FROM driver
-WHERE id = $1 LIMIT 1
-`
-
-func (q *Queries) GetDriver(ctx context.Context, id pgtype.UUID) (Driver, error) {
-	row := q.db.QueryRow(ctx, getDriver, id)
-	var i Driver
-	err := row.Scan(&i.ID, &i.Name, &i.Status)
-	return i, err
-}
-
-const getRandomAvailableDriver = `-- name: GetRandomAvailableDriver :one
-SELECT id, name, status FROM driver
-WHERE status = 'available'
-ORDER BY RANDOM()
-LIMIT 1
-`
-
-func (q *Queries) GetRandomAvailableDriver(ctx context.Context) (Driver, error) {
-	row := q.db.QueryRow(ctx, getRandomAvailableDriver)
-	var i Driver
-	err := row.Scan(&i.ID, &i.Name, &i.Status)
-	return i, err
 }
 
 const getRide = `-- name: GetRide :one
@@ -130,31 +74,6 @@ func (q *Queries) GetRide(ctx context.Context, id pgtype.UUID) (Ride, error) {
 		&i.AcceptedAt,
 	)
 	return i, err
-}
-
-const listDrivers = `-- name: ListDrivers :many
-SELECT id, name, status FROM driver
-ORDER BY name
-`
-
-func (q *Queries) ListDrivers(ctx context.Context) ([]Driver, error) {
-	rows, err := q.db.Query(ctx, listDrivers)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Driver
-	for rows.Next() {
-		var i Driver
-		if err := rows.Scan(&i.ID, &i.Name, &i.Status); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const listRides = `-- name: ListRides :many
@@ -189,22 +108,6 @@ func (q *Queries) ListRides(ctx context.Context) ([]Ride, error) {
 		return nil, err
 	}
 	return items, nil
-}
-
-const updateDriverStatus = `-- name: UpdateDriverStatus :exec
-UPDATE driver
-SET status = $2
-WHERE id = $1
-`
-
-type UpdateDriverStatusParams struct {
-	ID     pgtype.UUID
-	Status Driverstatus
-}
-
-func (q *Queries) UpdateDriverStatus(ctx context.Context, arg UpdateDriverStatusParams) error {
-	_, err := q.db.Exec(ctx, updateDriverStatus, arg.ID, arg.Status)
-	return err
 }
 
 const updateRideAccepted = `-- name: UpdateRideAccepted :one

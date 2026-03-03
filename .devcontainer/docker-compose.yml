@@ -1,6 +1,7 @@
 volumes:
   rider-postgres-data:
   ride-postgres-data:
+  matching-postgres-data:
   pgadmin-data:
   redis-data:
   redisinsight-data:
@@ -32,7 +33,7 @@ services:
 
   # Add "forwardPorts": ["5432"] to **devcontainer.json** to forward PostgreSQL locally.
   # (Adding the "ports" property to this file will not forward from a Codespace.)
-    : 
+
 
 
   # ============================================
@@ -51,6 +52,7 @@ services:
       - DB_PORT=5432
       - DB_NAME=ride_db
       - RIDER_SERVICE_ADDR=rider-service:50052
+      - MATCHING_SERVICE_ADDR=matching-service:50053
       - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ride-db:5432/ride_db
     ports:
       - "50051:50051"
@@ -77,8 +79,6 @@ services:
       - ride-postgres-data:/var/lib/postgresql/
       # tables
       - ../services/ride/data/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
-      # seed
-      - ../services/ride/data/seed/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
     ports:
       - "5433:5432"
     networks:
@@ -130,6 +130,54 @@ services:
       - ../services/rider/data/seed/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
     ports:
       - "5434:5432"
+    networks:
+      - rideshare-network
+
+
+  matching-service:
+    build:
+      context: ..
+      dockerfile: services/matching/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - SERVICE_NAME=matching-service
+      - GRPC_PORT=50053
+      - DB_HOST=matching-db
+      - DB_PORT=5432
+      - DB_NAME=matching_db
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@matching-db:5432/matching_db
+    ports:
+      - "50053:50053"
+    depends_on:
+      matching-db:
+        condition: service_healthy
+      ride-service:
+        condition: service_started
+    networks:
+      - rideshare-network
+    restart: "no" # Don't auto-restart during crash testing
+
+  matching-db:
+    image: postgres:latest
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: matching_db
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d matching_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - matching-postgres-data:/var/lib/postgresql/
+      # create tables
+      - ../services/matching/data/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      # seed
+      - ../services/matching/data/seed/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
+    ports:
+      - "5435:5432"
     networks:
       - rideshare-network
 
