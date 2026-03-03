@@ -53,6 +53,33 @@ func (q *Queries) GetDriver(ctx context.Context, id pgtype.UUID) (Driver, error)
 	return i, err
 }
 
+const getNRandomAvailableDrivers = `-- name: GetNRandomAvailableDrivers :many
+SELECT id, name, status FROM driver
+WHERE status = 'available'
+ORDER BY RANDOM()
+LIMIT $1
+`
+
+func (q *Queries) GetNRandomAvailableDrivers(ctx context.Context, limit int32) ([]Driver, error) {
+	rows, err := q.db.Query(ctx, getNRandomAvailableDrivers, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Driver
+	for rows.Next() {
+		var i Driver
+		if err := rows.Scan(&i.ID, &i.Name, &i.Status); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getRandomAvailableDriver = `-- name: GetRandomAvailableDriver :one
 SELECT id, name, status FROM driver
 WHERE status = 'available'
@@ -90,6 +117,16 @@ func (q *Queries) ListDrivers(ctx context.Context) ([]Driver, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const resetAllDriversToAvailable = `-- name: ResetAllDriversToAvailable :exec
+UPDATE driver
+SET status = 'available'
+`
+
+func (q *Queries) ResetAllDriversToAvailable(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, resetAllDriversToAvailable)
+	return err
 }
 
 const updateDriverStatus = `-- name: UpdateDriverStatus :exec

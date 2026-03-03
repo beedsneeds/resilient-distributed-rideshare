@@ -52,8 +52,8 @@ func main() {
 
 	queries := riderdata.New(pgconn)
 
-	for i := 1; i <= 10; i++ {
-		time.Sleep(time.Duration(i*300) * time.Millisecond)
+	for i := 1; i <= 20; i++ {
+		time.Sleep(time.Duration(i*500) * time.Millisecond)
 
 		rider, err := queries.GetRandomAvailableRider(context.Background())
 		if err != nil {

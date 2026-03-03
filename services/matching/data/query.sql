@@ -12,6 +12,12 @@ WHERE status = 'available'
 ORDER BY RANDOM()
 LIMIT 1;
 
+-- name: GetNRandomAvailableDrivers :many
+SELECT * FROM driver
+WHERE status = 'available'
+ORDER BY RANDOM()
+LIMIT $1;
+
 -- name: ListDrivers :many
 SELECT * FROM driver
 ORDER BY name;
@@ -32,3 +38,7 @@ WHERE id = $1;
 UPDATE driver
 SET status = $2
 WHERE id = $1;
+
+-- name: ResetAllDriversToAvailable :exec
+UPDATE driver
+SET status = 'available';
