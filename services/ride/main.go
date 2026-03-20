@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"time"
 
 	ridepb "github.com/beedsneeds/resilient-distributed-rideshare/proto/ride"
 	"github.com/beedsneeds/resilient-distributed-rideshare/services/ride/data"
@@ -15,6 +16,8 @@ import (
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -79,6 +82,8 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 		return nil, status.Errorf(codes.Internal, "CreateRide failed: %v", err)
 	}
 
+	// What if service dies here?
+
 	xargs := redis.XAddArgs{
 		Stream: "ride.requested",
 		ID:     "*",
@@ -122,13 +127,31 @@ func main() {
 	var opts []grpc.ServerOption
 	grpcServer := grpc.NewServer(opts...)
 	rideServer, pgconn, rdsconn := newServer()
+	ridepb.RegisterRideServiceServer(grpcServer, rideServer)
 	defer pgconn.Close(context.Background())
 	defer rdsconn.Close()
 
-	ridepb.RegisterRideServiceServer(grpcServer, rideServer)
+	healthServer := health.NewServer()
+	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
+
+	// Liveness ("") defaults to SERVING automatically
+	// Readyness ("readiness") starts as NOT_SERVING. The goroutine handles it fully
+	go func() {
+		for {
+			time.Sleep(5 * time.Second)
+			err1 := pgconn.Ping(context.Background())
+			err2 := rdsconn.Ping(context.Background()).Err()
+			if err1 == nil && err2 == nil {
+				healthServer.SetServingStatus("readiness", grpc_health_v1.HealthCheckResponse_SERVING)
+			} else {
+				healthServer.SetServingStatus("readiness", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+				log.Printf("readiness check failed: postgres=%v redis=%v", err1, err2)
+			}
+		}
+	}()
+
 	log.Printf("ride-service listening on port %d", *port)
-	err = grpcServer.Serve(lis)
-	if err != nil {
+	if err = grpcServer.Serve(lis); err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 

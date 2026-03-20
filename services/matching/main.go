@@ -4,11 +4,11 @@ import (
 	"context"
 	"time"
 
-	// "flag"
+	"flag"
 	"fmt"
 	"log"
 
-	// "net"
+	"net"
 
 	matchingdata "github.com/beedsneeds/resilient-distributed-rideshare/services/matching/data"
 	"github.com/go-redsync/redsync/v4"
@@ -19,6 +19,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/redis/go-redis/v9"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
+)
+
+var (
+	port = flag.Int("port", 50053, "The server port")
 )
 
 type matchingServiceServer struct {
@@ -34,8 +41,12 @@ func matchDriver(s matchingServiceServer) (matchingdata.Driver, error) {
 		return matchingdata.Driver{}, fmt.Errorf("GetNRandomAvailableDrivers failed: %v", err)
 	}
 	if len(drivers) == 0 {
+		log.Printf("Ran out of drivers, resetting state")
 		s.queries.ResetAllDriversToAvailable(context.Background())
-		return matchingdata.Driver{}, fmt.Errorf("GetNRandomAvailableDrivers failed: No available drivers. Reset all drivers to available. Restart Server")
+		drivers, err = s.queries.GetNRandomAvailableDrivers(context.Background(), int32(5))
+		if err != nil || len(drivers) == 0 {
+			return matchingdata.Driver{}, fmt.Errorf("GetNRandomAvailableDrivers failed after reset: no available drivers")
+		}
 	}
 
 	ctx := context.Background()
@@ -69,7 +80,7 @@ func matchDriver(s matchingServiceServer) (matchingdata.Driver, error) {
 		// For simplicity, driver will always accept
 		time.Sleep(3 * time.Second)
 
-		// Publish driver accepted event
+		// TODO Publish driver accepted event
 
 		// Release Lock
 		ok, err := mutex.Unlock()
@@ -80,9 +91,8 @@ func matchDriver(s matchingServiceServer) (matchingdata.Driver, error) {
 		return driver, nil
 		// If no driver found, matching failed. Do something
 	}
-
+	// Warning: This error message is coupled to retry logic in processRideRequests. Change both or none.
 	return matchingdata.Driver{}, fmt.Errorf("Could not match")
-
 }
 
 func processRideRequests(ctx context.Context, s matchingServiceServer, consumer string) error {
@@ -140,7 +150,6 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 		s.messages.XAck(ctx, "ride.requested", consgroup, message.ID)
 		lastID = message.ID
 	}
-
 }
 
 func main() {
@@ -159,6 +168,7 @@ func main() {
 	})
 	defer rdsconn.Close()
 
+	// Redsync
 	client := redis.NewClient(&redis.Options{
 		Addr: "redis:6379",
 	})
@@ -172,7 +182,38 @@ func main() {
 		rs:       redsync.New(rspool),
 	}
 
-	// Start listening
+	// gRPC server to serve health check probes
+	// TODO: when I implement synchronous RPCs that are served in this gRPC server, use errgroup to manage both goroutine failures
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+	if err != nil {
+		log.Fatalf("failed to listen: %v", err)
+	}
+	grpcServer := grpc.NewServer()
+	healthServer := health.NewServer()
+	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
+
+	// Readiness goroutine that maintains service status by pinging dependencies
+	go func() {
+		time.Sleep(5 * time.Second)
+		err1 := pgxpool.Ping(context.Background())
+		err2 := rdsconn.Ping(context.Background()).Err()
+		if err1 == nil && err2 == nil {
+			healthServer.SetServingStatus("readiness", grpc_health_v1.HealthCheckResponse_SERVING)
+		} else {
+			healthServer.SetServingStatus("readiness", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+			log.Printf("readiness check failed: postgres=%v redis=%v", err1, err2)
+		}
+	}()
+
+	// gRPC goroutine to respond to health check probes with current status
+	go func() {
+		log.Printf("matching-service gRPC listening on port %d", *port)
+		if err := grpcServer.Serve(lis); err != nil {
+			log.Fatalf("gRPC serve failed to listen: %v", err)
+		}
+	}()
+
+	// Main go routine: start consuming messages
 	const consumer = "matching-1" // TODO don't hard code this
 	log.Printf("Processing Ride Requests...")
 	err = processRideRequests(context.Background(), *s, consumer)

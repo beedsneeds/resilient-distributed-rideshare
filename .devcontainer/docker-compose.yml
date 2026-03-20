@@ -59,9 +59,17 @@ services:
     depends_on:
       ride-db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - rideshare-network
-    restart: "no"
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "/bin/grpc_health_probe", "-addr=:50051"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
   ride-db:
     image: postgres:latest
@@ -108,7 +116,7 @@ services:
         condition: service_started
     networks:
       - rideshare-network
-    restart: "no" # Don't auto-restart during crash testing
+    restart: on-failure # Don't auto-restart during crash testing
 
   rider-db:
     image: postgres:latest
@@ -156,7 +164,14 @@ services:
         condition: service_started
     networks:
       - rideshare-network
-    restart: "no" # Don't auto-restart during crash testing
+    restart: on-failure # Don't auto-restart during crash testing
+    healthcheck:
+      test: ["CMD", "/bin/grpc_health_probe", "-addr=:50053"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
 
   matching-db:
     image: postgres:latest
@@ -189,6 +204,11 @@ services:
       - redis-data:/data
     networks:
       - rideshare-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   redisinsight:
     image: redis/redisinsight:latest

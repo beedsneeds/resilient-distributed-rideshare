@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
 var serverAddr = flag.String("addr", "localhost:50051", "The server address in the format of host:port")
@@ -20,6 +21,7 @@ var serverAddr = flag.String("addr", "localhost:50051", "The server address in t
 func requestRide(client ridepb.RideServiceClient, riderID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
 	ride, err := client.RequestRide(ctx, &ridepb.RequestRideRequest{
 		// TODO implement actual idempotency with redis
 		IdempotencyKey: &riderID,
@@ -65,6 +67,15 @@ func main() {
 		riderID, err := uuid.FromBytes(rider.ID.Bytes[:])
 		if err != nil {
 			log.Printf("invalid rider UUID: %v", err)
+		// Health check before every request
+		healthClient := healthpb.NewHealthClient(conn)
+		healthCtx, healthCancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer healthCancel()
+		resp, err := healthClient.Check(healthCtx, &healthpb.HealthCheckRequest{
+			Service: "readiness",
+		})
+		if err != nil || resp.Status != healthpb.HealthCheckResponse_SERVING {
+			log.Printf("ride-service not ready, skipping request")
 			continue
 		}
 
@@ -72,5 +83,6 @@ func main() {
 		if err != nil {
 			log.Printf("requestRide failed for rider %s: %v", riderID, err)
 		}
+		fmt.Printf("Rider: %v\n", rider)
 	}
 }
