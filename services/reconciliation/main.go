@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+
 	// "os"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 type reconciler struct {
 	rideQueries     *ridedata.Queries
 	matchingQueries *matchingdata.Queries
-	redis           *redis.Client
+	messages        *redis.Client
 }
 
 // Tunable: determine how old a state must be before its considered stale
@@ -30,8 +31,10 @@ const (
 
 // Duplicated rides: When more than one ride is created for the same person within duplicateRideThreshold seconds
 
-// Orphaned rides: When a ride is written to Postgres but is never published to the Redis stream
-// Occurs when the ride-service crashed between db write and redis XADD
+// Orphaned rides: When a ride is written to Postgres but its been staleRequestedThreshold seconds since it was requested
+// Occurs when
+// 1. the ride-service crashed between db write and redis XADD, so the ride was never published to the Redis stream
+// 2. Status was not updated to matching (not handled yet) - possibly a db failure
 func (r *reconciler) checkOrphanedRides(ctx context.Context) {
 	rides, err := r.rideQueries.GetStaleRidesByStatus(ctx, ridedata.GetStaleRidesByStatusParams{
 		RideStatus: ridedata.RidestatusRequested,
@@ -49,7 +52,17 @@ func (r *reconciler) checkOrphanedRides(ctx context.Context) {
 
 		log.Printf("ORPHANED RIDE: id=%x status=%s requested_at=%v",
 			ride.ID.Bytes, ride.RideStatus, ride.RequestedAt.Time)
-		// TODO: republish to stream, or mark as failed
+
+		xargs := redis.XAddArgs{
+			Stream: "ride.requested",
+			ID:     "*",
+			Values: []string{"rideID", ride.ID.String()},
+			// TODO idempotency with IDMP
+		}
+		err = r.messages.XAdd(ctx, &xargs).Err()
+		if err != nil {
+			log.Printf("failed to publish ride event: %v", err)
+		}
 	}
 	log.Printf("Orphaned rides: %d found", len(rides))
 
@@ -92,7 +105,7 @@ func main() {
 	r := &reconciler{
 		rideQueries:     ridedata.New(ridePool),
 		matchingQueries: matchingdata.New(matchingPool),
-		redis:           rdsconn,
+		messages:        rdsconn,
 	}
 
 	r.reconciliate(ctx)

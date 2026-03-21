@@ -3,8 +3,8 @@ module github.com/beedsneeds/resilient-distributed-rideshare/services/reconcilia
 go 1.25.8
 
 require (
-	github.com/beedsneeds/resilient-distributed-rideshare/services/matching v0.0.0-20260303072138-bdb2977290a3
-	github.com/beedsneeds/resilient-distributed-rideshare/services/ride v0.0.0-20260303072138-bdb2977290a3
+	github.com/beedsneeds/resilient-distributed-rideshare/services/matching v0.0.0-20260321163956-4e331d219b22
+	github.com/beedsneeds/resilient-distributed-rideshare/services/ride v0.0.0-20260321163956-4e331d219b22
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/redis/go-redis/v9 v9.18.0
 )
@@ -16,6 +16,6 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/text v0.32.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
 )

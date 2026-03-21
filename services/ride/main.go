@@ -9,7 +9,7 @@ import (
 	"time"
 
 	ridepb "github.com/beedsneeds/resilient-distributed-rideshare/proto/ride"
-	"github.com/beedsneeds/resilient-distributed-rideshare/services/ride/data"
+	ridedata "github.com/beedsneeds/resilient-distributed-rideshare/services/ride/data"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -28,9 +28,14 @@ var (
 
 type rideServiceServer struct {
 	ridepb.UnimplementedRideServiceServer
-	// shared connection pool
+	pgconn   *pgx.Conn
 	queries  *ridedata.Queries
 	messages *redis.Client
+}
+
+func (s *rideServiceServer) Close() {
+	s.pgconn.Close(context.Background())
+	s.messages.Close()
 }
 
 var rideStatusToProto = map[ridedata.Ridestatus]ridepb.RideStatus{
@@ -84,6 +89,7 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 
 	// What if service dies here?
 
+	// This is reused in reconciliation/main.go
 	xargs := redis.XAddArgs{
 		Stream: "ride.requested",
 		ID:     "*",
@@ -100,13 +106,12 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 	}, nil
 }
 
-func newServer() (*rideServiceServer, *pgx.Conn, *redis.Client) {
+func newServer() (*rideServiceServer, error) {
 	databaseURL := "postgres://postgres:postgres@ride-db:5432/ride_db"
-	// TODO use pgpool for a connection pool when handling multiple requests
 	pgconn, err := pgx.Connect(context.Background(), databaseURL)
 	// pgconn, err := pgx.Connect(context.Background(), os.Getenv("DATABASE_URL"))
 	if err != nil {
-		log.Fatalf("unable to connect to database: %v", err)
+		return nil, fmt.Errorf("unable to connect to database: %w", err)
 	}
 	rdsconn := redis.NewClient(&redis.Options{
 		Addr:     "redis:6379",
@@ -114,7 +119,7 @@ func newServer() (*rideServiceServer, *pgx.Conn, *redis.Client) {
 		DB:       0,
 	})
 
-	return &rideServiceServer{queries: ridedata.New(pgconn), messages: rdsconn}, pgconn, rdsconn
+	return &rideServiceServer{pgconn: pgconn, queries: ridedata.New(pgconn), messages: rdsconn}, nil
 }
 
 func main() {
@@ -126,10 +131,12 @@ func main() {
 	// https://github.com/grpc/grpc-go/blob/master/examples/route_guide/server/server.go#L123
 	var opts []grpc.ServerOption
 	grpcServer := grpc.NewServer(opts...)
-	rideServer, pgconn, rdsconn := newServer()
+	rideServer, err := newServer()
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	defer rideServer.Close()
 	ridepb.RegisterRideServiceServer(grpcServer, rideServer)
-	defer pgconn.Close(context.Background())
-	defer rdsconn.Close()
 
 	healthServer := health.NewServer()
 	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
@@ -139,8 +146,8 @@ func main() {
 	go func() {
 		for {
 			time.Sleep(5 * time.Second)
-			err1 := pgconn.Ping(context.Background())
-			err2 := rdsconn.Ping(context.Background()).Err()
+			err1 := rideServer.pgconn.Ping(context.Background())
+			err2 := rideServer.messages.Ping(context.Background()).Err()
 			if err1 == nil && err2 == nil {
 				healthServer.SetServingStatus("readiness", grpc_health_v1.HealthCheckResponse_SERVING)
 			} else {
