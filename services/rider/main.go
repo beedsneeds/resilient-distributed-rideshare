@@ -9,7 +9,6 @@ import (
 
 	ridepb "github.com/beedsneeds/resilient-distributed-rideshare/proto/ride"
 	riderdata "github.com/beedsneeds/resilient-distributed-rideshare/services/rider/data"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -54,34 +53,30 @@ func main() {
 
 	queries := riderdata.New(pgconn)
 
-	for i := 1; i <= 20; i++ {
-		time.Sleep(time.Duration(i*500) * time.Millisecond)
+	for i := 1; i <= 30; i++ {
+		time.Sleep(time.Duration(5) * time.Second)
 
 		rider, err := queries.GetRandomAvailableRider(context.Background())
 		if err != nil {
 			log.Printf("GetRandomAvailableRider failed: %v", err)
 			continue
 		}
-		fmt.Printf("Rider: %v\n", rider)
 
-		riderID, err := uuid.FromBytes(rider.ID.Bytes[:])
-		if err != nil {
-			log.Printf("invalid rider UUID: %v", err)
 		// Health check before every request
 		healthClient := healthpb.NewHealthClient(conn)
 		healthCtx, healthCancel := context.WithTimeout(context.Background(), 1*time.Second)
-		defer healthCancel()
 		resp, err := healthClient.Check(healthCtx, &healthpb.HealthCheckRequest{
 			Service: "readiness",
 		})
+		healthCancel() // Check() is a blocking call, so we can safely cancel without deferring
 		if err != nil || resp.Status != healthpb.HealthCheckResponse_SERVING {
 			log.Printf("ride-service not ready, skipping request")
 			continue
 		}
 
-		err = requestRide(client, riderID.String())
+		err = requestRide(client, rider.ID.String())
 		if err != nil {
-			log.Printf("requestRide failed for rider %s: %v", riderID, err)
+			log.Printf("requestRide failed for rider %s: %v", rider.Name, err)
 		}
 		fmt.Printf("Rider: %v\n", rider)
 	}

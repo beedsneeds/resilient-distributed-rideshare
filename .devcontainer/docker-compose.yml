@@ -39,6 +39,32 @@ services:
   # ============================================
   # SERVICES
   # ============================================
+
+  reconciliation-service:
+    build:
+      context: ..
+      dockerfile: services/reconciliation/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - SERVICE_NAME=reconciliation-service
+      - RIDE_DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ride-db:5432/ride_db
+      - MATCHING_DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@matching-db:5432/matching_db
+      - REDIS_ADDR=redis:6379
+    depends_on:
+      ride-db:
+        condition: service_healthy
+      matching-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - rideshare-network
+    restart: on-failure
+    # No exposed ports because it doesn't listen for anything
+
+
+      
   ride-service:
     build:
       context: ..
@@ -113,7 +139,7 @@ services:
       rider-db:
         condition: service_healthy
       ride-service:
-        condition: service_started
+        condition: service_healthy
     networks:
       - rideshare-network
     restart: on-failure # Don't auto-restart during crash testing
@@ -161,7 +187,7 @@ services:
       matching-db:
         condition: service_healthy
       ride-service:
-        condition: service_started
+        condition: service_healthy
     networks:
       - rideshare-network
     restart: on-failure # Don't auto-restart during crash testing

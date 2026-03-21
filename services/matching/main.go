@@ -80,7 +80,7 @@ func matchDriver(s matchingServiceServer) (matchingdata.Driver, error) {
 		// For simplicity, driver will always accept
 		time.Sleep(3 * time.Second)
 
-		// TODO Publish driver accepted event
+		// TODO Publish driver accepted event or should it be a synchronous RPC?
 
 		// Release Lock
 		ok, err := mutex.Unlock()
@@ -146,6 +146,8 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 			}
 		}
 		log.Printf("Driver %v matched to ride ID %v", driver, rideID)
+
+		// Possible failure scenario
 
 		s.messages.XAck(ctx, "ride.requested", consgroup, message.ID)
 		lastID = message.ID

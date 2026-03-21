@@ -42,3 +42,10 @@ WHERE id = $1;
 -- name: ResetAllDriversToAvailable :exec
 UPDATE driver
 SET status = 'available';
+
+/* 
+    Reconciliation Queries
+*/
+-- name: GetBusyDrivers :many
+SELECT * FROM driver
+WHERE status = 'busy';

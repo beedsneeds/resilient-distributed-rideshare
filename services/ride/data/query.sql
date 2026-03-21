@@ -56,6 +56,14 @@ RETURNING *;
 DELETE FROM ride
 WHERE id = $1;
 
+/* 
+    Reconciliation Queries
+*/
+-- name: GetStaleRidesByStatus :many
+SELECT * FROM ride
+WHERE ride_status = $1
+  AND requested_at < NOW() - INTERVAL '1 second' * $2;
+
 
 
 

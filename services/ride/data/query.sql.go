@@ -76,6 +76,49 @@ func (q *Queries) GetRide(ctx context.Context, id pgtype.UUID) (Ride, error) {
 	return i, err
 }
 
+const getStaleRidesByStatus = `-- name: GetStaleRidesByStatus :many
+/* 
+    Reconciliation Queries
+*/
+SELECT id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at FROM ride
+WHERE ride_status = $1
+  AND requested_at < NOW() - INTERVAL '1 second' * $2
+`
+
+type GetStaleRidesByStatusParams struct {
+	RideStatus Ridestatus
+	Column2    interface{}
+}
+
+func (q *Queries) GetStaleRidesByStatus(ctx context.Context, arg GetStaleRidesByStatusParams) ([]Ride, error) {
+	rows, err := q.db.Query(ctx, getStaleRidesByStatus, arg.RideStatus, arg.Column2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Ride
+	for rows.Next() {
+		var i Ride
+		if err := rows.Scan(
+			&i.ID,
+			&i.RiderID,
+			&i.DriverID,
+			&i.RideStatus,
+			&i.RequestedAt,
+			&i.MatchingAt,
+			&i.MatchedAt,
+			&i.AcceptedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRides = `-- name: ListRides :many
 SELECT id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at FROM ride
 ORDER BY requested_at

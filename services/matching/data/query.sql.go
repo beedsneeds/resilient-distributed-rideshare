@@ -37,6 +37,34 @@ func (q *Queries) DeleteDriver(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const getBusyDrivers = `-- name: GetBusyDrivers :many
+/* 
+    Reconciliation Queries
+*/
+SELECT id, name, status FROM driver
+WHERE status = 'busy'
+`
+
+func (q *Queries) GetBusyDrivers(ctx context.Context) ([]Driver, error) {
+	rows, err := q.db.Query(ctx, getBusyDrivers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Driver
+	for rows.Next() {
+		var i Driver
+		if err := rows.Scan(&i.ID, &i.Name, &i.Status); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getDriver = `-- name: GetDriver :one
 /* 
 * Driver
