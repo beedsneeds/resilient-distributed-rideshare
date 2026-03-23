@@ -3,6 +3,7 @@ module github.com/beedsneeds/resilient-distributed-rideshare/services/matching
 go 1.25.6
 
 require (
+	github.com/beedsneeds/resilient-distributed-rideshare/proto v0.0.0-20260321163956-4e331d219b22
 	github.com/go-redsync/redsync/v4 v4.16.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/redis/go-redis/v9 v9.18.0
@@ -23,5 +24,5 @@ require (
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
-	google.golang.org/protobuf v1.36.10 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 )

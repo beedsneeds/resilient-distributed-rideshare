@@ -26,6 +26,9 @@ WHERE id = $1
 RETURNING *;
 -- TODO: check if 1) ride exists 2) the correct enum is being inserted
 
+/* 
+* Don't condense into a single update to protect valid state transitions 
+*/
 -- name: UpdateRideMatching :one
 UPDATE ride
 SET ride_status = 'matching',
@@ -34,6 +37,10 @@ WHERE id = $1
     AND ride_status = 'requested'
 RETURNING *;
 
+/*
+* We aren't using this because we assume the human element in the transition of matched -> accepted 
+* does not exist and that it will always succeed. Will extend functionality later (maybe)
+*/
 -- name: UpdateRideMatched :one
 UPDATE ride
 SET ride_status = 'matched',
@@ -48,7 +55,7 @@ SET driver_id = $2,
     ride_status = 'accepted',
     accepted_at = NOW()
 WHERE id = $1
-    AND ride_status = 'matched'
+    AND ride_status = 'matching'
 RETURNING *;
 
 

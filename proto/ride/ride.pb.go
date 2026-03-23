@@ -379,6 +379,7 @@ type UpdateRideStatusRequest struct {
 	IdempotencyKey *string                `protobuf:"bytes,1,opt,name=idempotency_key,json=idempotencyKey" json:"idempotency_key,omitempty"`
 	RideId         *string                `protobuf:"bytes,2,opt,name=ride_id,json=rideId" json:"ride_id,omitempty"`
 	RideStatus     *RideStatus            `protobuf:"varint,3,opt,name=ride_status,json=rideStatus,enum=ride.RideStatus" json:"ride_status,omitempty"`
+	DriverId       *string                `protobuf:"bytes,4,opt,name=driver_id,json=driverId" json:"driver_id,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -432,6 +433,13 @@ func (x *UpdateRideStatusRequest) GetRideStatus() RideStatus {
 		return *x.RideStatus
 	}
 	return RideStatus_RIDE_STATUS_UNSPECIFIED
+}
+
+func (x *UpdateRideStatusRequest) GetDriverId() string {
+	if x != nil && x.DriverId != nil {
+		return *x.DriverId
+	}
+	return ""
 }
 
 type UpdateRideStatusResponse struct {
@@ -507,12 +515,13 @@ const file_ride_proto_rawDesc = "" +
 	"\aride_id\x18\x01 \x01(\tR\x06rideId\"1\n" +
 	"\x0fGetRideResponse\x12\x1e\n" +
 	"\x04ride\x18\x01 \x01(\v2\n" +
-	".ride.RideR\x04ride\"\x8e\x01\n" +
+	".ride.RideR\x04ride\"\xb2\x01\n" +
 	"\x17UpdateRideStatusRequest\x12'\n" +
 	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\x12\x17\n" +
 	"\aride_id\x18\x02 \x01(\tR\x06rideId\x121\n" +
 	"\vride_status\x18\x03 \x01(\x0e2\x10.ride.RideStatusR\n" +
-	"rideStatus\":\n" +
+	"rideStatus\x12\"\n" +
+	"\tdriver_id\x18\x04 \x01(\tB\x05\xaa\x01\x02\b\x01R\bdriverId\":\n" +
 	"\x18UpdateRideStatusResponse\x12\x1e\n" +
 	"\x04ride\x18\x01 \x01(\v2\n" +
 	".ride.RideR\x04ride*\xfc\x01\n" +

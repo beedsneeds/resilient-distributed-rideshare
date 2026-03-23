@@ -59,16 +59,53 @@ func sqlcRidetoProtoRide(r ridedata.Ride) *ridepb.Ride {
 
 	rideIDStr := uuid.UUID(r.ID.Bytes).String()
 	riderIDstr := uuid.UUID(r.RiderID.Bytes).String()
-	driverIDstr := uuid.UUID(r.DriverID.Bytes).String()
 	rideStatus := rideStatusToProto[r.RideStatus]
 
-	return &ridepb.Ride{
+	ride := &ridepb.Ride{
 		Id:          &rideIDStr,
 		RiderId:     &riderIDstr,
-		DriverId:    &driverIDstr,
 		RideStatus:  &rideStatus,
 		RequestedAt: requestedAt,
 	}
+	if r.DriverID.Valid {
+		driverIDstr := uuid.UUID(r.DriverID.Bytes).String()
+		ride.DriverId = &driverIDstr
+	}
+	return ride
+}
+
+func (s *rideServiceServer) UpdateRideStatus(ctx context.Context, request *ridepb.UpdateRideStatusRequest) (*ridepb.UpdateRideStatusResponse, error) {
+
+	rideID, err := uuid.Parse(request.GetRideId())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid rider ID: %v", err)
+	}
+	var ride ridedata.Ride
+	var qErr error
+	switch rideStatus := request.GetRideStatus(); rideStatus {
+	case *ridepb.RideStatus_RIDE_STATUS_MATCHING.Enum():
+		ride, qErr = s.queries.UpdateRideMatching(ctx, pgtype.UUID{Bytes: rideID, Valid: true})
+	// case *ridepb.RideStatus_RIDE_STATUS_MATCHED.Enum():
+	// 	ride, qErr = s.queries.UpdateRideMatched(ctx, pgtype.UUID{Bytes: rideID, Valid: true})
+	case *ridepb.RideStatus_RIDE_STATUS_ACCEPTED.Enum():
+		driverID, dErr := uuid.Parse(request.GetDriverId())
+		if dErr != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid driver ID: %v", dErr)
+		}
+		ride, qErr = s.queries.UpdateRideAccepted(ctx, ridedata.UpdateRideAcceptedParams{
+			ID:       pgtype.UUID{Bytes: rideID, Valid: true},
+			DriverID: pgtype.UUID{Bytes: driverID, Valid: true}})
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported ride status: %v", rideStatus)
+	}
+
+	if qErr != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update ride status: %v", qErr)
+	}
+
+	return &ridepb.UpdateRideStatusResponse{
+		Ride: sqlcRidetoProtoRide(ride),
+	}, nil
 }
 
 func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.RequestRideRequest) (*ridepb.RequestRideResponse, error) {

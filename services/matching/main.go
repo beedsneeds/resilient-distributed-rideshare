@@ -18,20 +18,46 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	ridepb "github.com/beedsneeds/resilient-distributed-rideshare/proto/ride"
+
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 )
 
 var (
-	port = flag.Int("port", 50053, "The server port")
+	port       = flag.Int("port", 50053, "The server port")
+	serverAddr = flag.String("addr", "localhost:50051", "The server address in the format of host:port")
 )
 
 type matchingServiceServer struct {
-	queries  *matchingdata.Queries
-	messages *redis.Client
-	rs       *redsync.Redsync
+	queries    *matchingdata.Queries
+	messages   *redis.Client
+	rs         *redsync.Redsync
+	rideClient ridepb.RideServiceClient
+}
+
+// Optional Parameter: driverID is not required (pass "" instead) unless Status is 'Accepted'
+func updateRideStatus(client ridepb.RideServiceClient, rideID string, status ridepb.RideStatus, driverID string) (*ridepb.UpdateRideStatusResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req := &ridepb.UpdateRideStatusRequest{
+		IdempotencyKey: &rideID,
+		RideId:         &rideID,
+		RideStatus:     &status,
+	}
+	if driverID != "" {
+		req.DriverId = &driverID
+	}
+
+	ride, err := client.UpdateRideStatus(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("updateRideStatus failed: %w", err)
+	}
+	return ride, nil
 }
 
 func matchDriver(s matchingServiceServer) (matchingdata.Driver, error) {
@@ -131,10 +157,17 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 		if len(streams[0].Messages) == 0 {
 			// Start processesing new messages
 			checkBacklog = false
+			log.Printf("finished backlog")
 			continue
 		}
 		message := streams[0].Messages[0]
 		rideID := message.Values["rideID"].(string)
+		log.Printf("message ID: %s", message.ID)
+
+		_, err = updateRideStatus(s.rideClient, rideID, ridepb.RideStatus_RIDE_STATUS_MATCHING, "")
+		if err != nil {
+			log.Printf("updateRideStatus MATCHING failed for ride %s: %v", rideID, err)
+		}
 
 		// Match driver currently doesn't use rideID but it ideally takes rider location while matching
 		driver, err := matchDriver(s)
@@ -145,17 +178,32 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 				return err
 			}
 		}
-		log.Printf("Driver %v matched to ride ID %v", driver, rideID)
+
+		log.Printf("Driver %v accepted ride with ID %v", driver, rideID)
+		_, err = updateRideStatus(s.rideClient, rideID, ridepb.RideStatus_RIDE_STATUS_ACCEPTED, driver.ID.String())
+		if err != nil {
+			log.Printf("updateRideStatus ACCEPTED failed for ride %s: %v", rideID, err)
+		}
 
 		// Possible failure scenario
 
-		s.messages.XAck(ctx, "ride.requested", consgroup, message.ID)
+		if err := s.messages.XAck(ctx, "ride.requested", consgroup, message.ID).Err(); err != nil {
+			log.Printf("XAck failed for message %s: %v", message.ID, err)
+		}
 		lastID = message.ID
 	}
 }
 
 func main() {
+	flag.Parse()
 	// Connections
+	conn, err := grpc.NewClient(*serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("could not dial: %v", err)
+	}
+	defer conn.Close()
+	client := ridepb.NewRideServiceClient(conn)
+
 	databaseURL := "postgres://postgres:postgres@matching-db:5432/matching_db"
 	pgxpool, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
@@ -171,17 +219,18 @@ func main() {
 	defer rdsconn.Close()
 
 	// Redsync
-	client := redis.NewClient(&redis.Options{
+	rs := redis.NewClient(&redis.Options{
 		Addr: "redis:6379",
 	})
-	defer client.Close()
+	defer rs.Close()
 	// not redigo
-	rspool := goredis.NewPool(client)
+	rspool := goredis.NewPool(rs)
 
 	s := &matchingServiceServer{
-		queries:  matchingdata.New(pgxpool),
-		messages: rdsconn,
-		rs:       redsync.New(rspool),
+		queries:    matchingdata.New(pgxpool),
+		messages:   rdsconn,
+		rs:         redsync.New(rspool),
+		rideClient: client,
 	}
 
 	// gRPC server to serve health check probes

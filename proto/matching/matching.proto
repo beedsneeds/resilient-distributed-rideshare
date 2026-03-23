@@ -1,0 +1,11 @@
+edition = "2023";
+
+package matching;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/beedsneeds/resilient-distributed-rideshare/proto/matching";
+
+service MatchingService {
+    
+}

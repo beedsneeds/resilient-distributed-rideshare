@@ -159,7 +159,7 @@ SET driver_id = $2,
     ride_status = 'accepted',
     accepted_at = NOW()
 WHERE id = $1
-    AND ride_status = 'matched'
+    AND ride_status = 'matching'
 RETURNING id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at
 `
 
@@ -185,6 +185,10 @@ func (q *Queries) UpdateRideAccepted(ctx context.Context, arg UpdateRideAccepted
 }
 
 const updateRideMatched = `-- name: UpdateRideMatched :one
+/*
+* We aren't using this because we assume the human element in the transition of matched -> accepted 
+* does not exist and that it will always succeed. Will extend functionality later (maybe)
+*/
 UPDATE ride
 SET ride_status = 'matched',
     matched_at = NOW()
@@ -211,6 +215,9 @@ func (q *Queries) UpdateRideMatched(ctx context.Context, id pgtype.UUID) (Ride, 
 
 const updateRideMatching = `-- name: UpdateRideMatching :one
 
+/* 
+* Don't condense into a single update to protect valid state transitions 
+*/
 UPDATE ride
 SET ride_status = 'matching',
     matching_at = NOW()

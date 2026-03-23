@@ -54,6 +54,7 @@ message UpdateRideStatusRequest {
   string idempotency_key = 1;
   string ride_id = 2;
   RideStatus ride_status = 3;
+  string driver_id = 4 [features.field_presence = EXPLICIT]; // Used only for 'accepted'
 }
 
 message UpdateRideStatusResponse {

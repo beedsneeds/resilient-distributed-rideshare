@@ -53,16 +53,16 @@ func (r *reconciler) checkOrphanedRides(ctx context.Context) {
 		log.Printf("ORPHANED RIDE: id=%x status=%s requested_at=%v",
 			ride.ID.Bytes, ride.RideStatus, ride.RequestedAt.Time)
 
-		xargs := redis.XAddArgs{
-			Stream: "ride.requested",
-			ID:     "*",
-			Values: []string{"rideID", ride.ID.String()},
-			// TODO idempotency with IDMP
-		}
-		err = r.messages.XAdd(ctx, &xargs).Err()
-		if err != nil {
-			log.Printf("failed to publish ride event: %v", err)
-		}
+		// xargs := redis.XAddArgs{
+		// 	Stream: "ride.requested",
+		// 	ID:     "*",
+		// 	Values: []string{"rideID", ride.ID.String()},
+		// 	// TODO idempotency with IDMP
+		// }
+		// err = r.messages.XAdd(ctx, &xargs).Err()
+		// if err != nil {
+		// 	log.Printf("failed to publish ride event: %v", err)
+		// }
 	}
 	log.Printf("Orphaned rides: %d found", len(rides))
 
