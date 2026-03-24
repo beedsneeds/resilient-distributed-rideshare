@@ -10,6 +10,8 @@ import (
 
 	"net"
 
+	"golang.org/x/sync/errgroup"
+
 	matchingdata "github.com/beedsneeds/resilient-distributed-rideshare/services/matching/data"
 	"github.com/go-redsync/redsync/v4"
 	"github.com/go-redsync/redsync/v4/redis/goredis/v9"
@@ -36,28 +38,7 @@ type matchingServiceServer struct {
 	queries    *matchingdata.Queries
 	messages   *redis.Client
 	rs         *redsync.Redsync
-	rideClient ridepb.RideServiceClient
-}
-
-// Optional Parameter: driverID is not required (pass "" instead) unless Status is 'Accepted'
-func updateRideStatus(client ridepb.RideServiceClient, rideID string, status ridepb.RideStatus, driverID string) (*ridepb.UpdateRideStatusResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	req := &ridepb.UpdateRideStatusRequest{
-		IdempotencyKey: &rideID,
-		RideId:         &rideID,
-		RideStatus:     &status,
-	}
-	if driverID != "" {
-		req.DriverId = &driverID
-	}
-
-	ride, err := client.UpdateRideStatus(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("updateRideStatus failed: %w", err)
-	}
-	return ride, nil
+	rideClient ridepb.RideServiceClient // Don't currently use it as everything is event-driven. Leaving it here for future expansion
 }
 
 func matchDriver(s matchingServiceServer) (matchingdata.Driver, error) {
@@ -126,10 +107,12 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 	lastID := "0"
 	const consgroup = "matching-group"
 
+	// Only create streams that will be consumed here
 	err := s.messages.XGroupCreateMkStream(ctx, "ride.requested", consgroup, "0").Err()
 	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
 		return fmt.Errorf("XGroupCreateMkStream: %v", err)
 	}
+
 	for {
 		var currID string
 		if checkBacklog {
@@ -147,7 +130,8 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 		}).Result()
 		if err == redis.Nil {
 			// block timed out, no messages
-			log.Printf("No new messages")
+			fmt.Printf("\r[%s] [ride.requested] No new messages", time.Now().Format("15:04:05"))
+
 			continue
 		}
 		if err != nil {
@@ -162,9 +146,15 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 		}
 		message := streams[0].Messages[0]
 		rideID := message.Values["rideID"].(string)
-		log.Printf("message ID: %s", message.ID)
+		log.Printf("\nmessage ID: %s", message.ID)
 
-		_, err = updateRideStatus(s.rideClient, rideID, ridepb.RideStatus_RIDE_STATUS_MATCHING, "")
+		// Publish an update to the Ride Status
+		xargs := redis.XAddArgs{
+			Stream: "ride.matching",
+			ID:     "*",
+			Values: []string{"rideID", rideID},
+		}
+		err = s.messages.XAdd(ctx, &xargs).Err()
 		if err != nil {
 			log.Printf("updateRideStatus MATCHING failed for ride %s: %v", rideID, err)
 		}
@@ -179,8 +169,14 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 			}
 		}
 
-		log.Printf("Driver %v accepted ride with ID %v", driver, rideID)
-		_, err = updateRideStatus(s.rideClient, rideID, ridepb.RideStatus_RIDE_STATUS_ACCEPTED, driver.ID.String())
+		// Publish an update to the Ride Status
+		log.Printf("\nDriver %v accepted ride with ID %v", driver, rideID)
+		xargs = redis.XAddArgs{
+			Stream: "ride.accepted",
+			ID:     "*",
+			Values: []string{"rideID", rideID, "driverID", driver.ID.String()},
+		}
+		err = s.messages.XAdd(ctx, &xargs).Err()
 		if err != nil {
 			log.Printf("updateRideStatus ACCEPTED failed for ride %s: %v", rideID, err)
 		}
@@ -246,8 +242,8 @@ func main() {
 	// Readiness goroutine that maintains service status by pinging dependencies
 	go func() {
 		time.Sleep(5 * time.Second)
-		err1 := pgxpool.Ping(context.Background())
-		err2 := rdsconn.Ping(context.Background()).Err()
+		err1 := pgxpool.Ping(context.Background())          // TODO: Should I add it to server struct??
+		err2 := s.messages.Ping(context.Background()).Err() // TODO: conversely, should I ping rdsconn instead?
 		if err1 == nil && err2 == nil {
 			healthServer.SetServingStatus("readiness", grpc_health_v1.HealthCheckResponse_SERVING)
 		} else {
@@ -256,20 +252,54 @@ func main() {
 		}
 	}()
 
-	// gRPC goroutine to respond to health check probes with current status
-	go func() {
+	g, ctx := errgroup.WithContext(context.Background())
+
+	g.Go(func() error {
 		log.Printf("matching-service gRPC listening on port %d", *port)
 		if err := grpcServer.Serve(lis); err != nil {
-			log.Fatalf("gRPC serve failed to listen: %v", err)
+			return fmt.Errorf("gRPC serve: %w", err)
 		}
-	}()
+		return nil
+	})
 
-	// Main go routine: start consuming messages
-	const consumer = "matching-1" // TODO don't hard code this
-	log.Printf("Processing Ride Requests...")
-	err = processRideRequests(context.Background(), *s, consumer)
-	if err != nil {
+	g.Go(func() error {
+		const consumer = "matching-1" // TODO don't hard code this
+		log.Printf("Processing Ride Requests...")
+		return processRideRequests(ctx, *s, consumer)
+	})
+
+	if err := g.Wait(); err != nil {
 		log.Fatalf("%v", err)
 	}
 
 }
+
+// See ride/main.go UpdateRideStatus
+// // Optional Parameter: driverID is not required (pass "" instead) unless Status is 'Accepted'
+// func updateRideStatus(client ridepb.RideServiceClient, rideID string, status ridepb.RideStatus, driverID string) (*ridepb.UpdateRideStatusResponse, error) {
+// 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+// 	defer cancel()
+
+// 	req := &ridepb.UpdateRideStatusRequest{
+// 		IdempotencyKey: &rideID,
+// 		RideId:         &rideID,
+// 		RideStatus:     &status,
+// 	}
+// 	if driverID != "" {
+// 		req.DriverId = &driverID
+// 	}
+
+// 	ride, err := client.UpdateRideStatus(ctx, req)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("updateRideStatus failed: %w", err)
+// 	}
+// 	return ride, nil
+// }
+// _, err = updateRideStatus(s.rideClient, rideID, ridepb.RideStatus_RIDE_STATUS_MATCHING, "")
+// if err != nil {
+// 	log.Printf("updateRideStatus MATCHING failed for ride %s: %v", rideID, err)
+// }
+// _, err = updateRideStatus(s.rideClient, rideID, ridepb.RideStatus_RIDE_STATUS_ACCEPTED, driver.ID.String())
+// if err != nil {
+// 	log.Printf("updateRideStatus ACCEPTED failed for ride %s: %v", rideID, err)
+// }

@@ -11,6 +11,8 @@ import (
 	ridepb "github.com/beedsneeds/resilient-distributed-rideshare/proto/ride"
 	ridedata "github.com/beedsneeds/resilient-distributed-rideshare/services/ride/data"
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/redis/go-redis/v9"
@@ -74,40 +76,6 @@ func sqlcRidetoProtoRide(r ridedata.Ride) *ridepb.Ride {
 	return ride
 }
 
-func (s *rideServiceServer) UpdateRideStatus(ctx context.Context, request *ridepb.UpdateRideStatusRequest) (*ridepb.UpdateRideStatusResponse, error) {
-
-	rideID, err := uuid.Parse(request.GetRideId())
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid rider ID: %v", err)
-	}
-	var ride ridedata.Ride
-	var qErr error
-	switch rideStatus := request.GetRideStatus(); rideStatus {
-	case *ridepb.RideStatus_RIDE_STATUS_MATCHING.Enum():
-		ride, qErr = s.queries.UpdateRideMatching(ctx, pgtype.UUID{Bytes: rideID, Valid: true})
-	// case *ridepb.RideStatus_RIDE_STATUS_MATCHED.Enum():
-	// 	ride, qErr = s.queries.UpdateRideMatched(ctx, pgtype.UUID{Bytes: rideID, Valid: true})
-	case *ridepb.RideStatus_RIDE_STATUS_ACCEPTED.Enum():
-		driverID, dErr := uuid.Parse(request.GetDriverId())
-		if dErr != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid driver ID: %v", dErr)
-		}
-		ride, qErr = s.queries.UpdateRideAccepted(ctx, ridedata.UpdateRideAcceptedParams{
-			ID:       pgtype.UUID{Bytes: rideID, Valid: true},
-			DriverID: pgtype.UUID{Bytes: driverID, Valid: true}})
-	default:
-		return nil, status.Errorf(codes.InvalidArgument, "unsupported ride status: %v", rideStatus)
-	}
-
-	if qErr != nil {
-		return nil, status.Errorf(codes.Internal, "failed to update ride status: %v", qErr)
-	}
-
-	return &ridepb.UpdateRideStatusResponse{
-		Ride: sqlcRidetoProtoRide(ride),
-	}, nil
-}
-
 func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.RequestRideRequest) (*ridepb.RequestRideResponse, error) {
 	newRideID := uuid.New()
 
@@ -131,7 +99,6 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 		Stream: "ride.requested",
 		ID:     "*",
 		Values: []string{"rideID", newRideID.String()},
-		// TODO idempotency with IDMP
 	}
 	err = s.messages.XAdd(ctx, &xargs).Err()
 	if err != nil {
@@ -178,13 +145,21 @@ func main() {
 	healthServer := health.NewServer()
 	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
 
+	g, ctx := errgroup.WithContext(context.Background())
+
 	// Liveness ("") defaults to SERVING automatically
 	// Readyness ("readiness") starts as NOT_SERVING. The goroutine handles it fully
-	go func() {
+	g.Go(func() error {
 		for {
-			time.Sleep(5 * time.Second)
-			err1 := rideServer.pgconn.Ping(context.Background())
-			err2 := rideServer.messages.Ping(context.Background()).Err()
+			// Using select because the infinite loop did not have a return path
+			select {
+			case <-ctx.Done():
+				// Exits when another goroutine fails
+				return nil
+			case <-time.After(5 * time.Second):
+			}
+			err1 := rideServer.pgconn.Ping(ctx)
+			err2 := rideServer.messages.Ping(ctx).Err()
 			if err1 == nil && err2 == nil {
 				healthServer.SetServingStatus("readiness", grpc_health_v1.HealthCheckResponse_SERVING)
 			} else {
@@ -192,11 +167,65 @@ func main() {
 				log.Printf("readiness check failed: postgres=%v redis=%v", err1, err2)
 			}
 		}
-	}()
+	})
 
-	log.Printf("ride-service listening on port %d", *port)
-	if err = grpcServer.Serve(lis); err != nil {
-		log.Fatalf("failed to listen: %v", err)
+	// Consume messages
+	g.Go(func() error {
+		const consumer = "ride-1" // TODO don't hard code this
+		log.Printf("Processing Ride Status Updates...")
+		return processRideMatchingUpdate(ctx, *rideServer, consumer)
+	})
+	g.Go(func() error {
+		const consumer = "ride-1" // TODO don't hard code this
+		log.Printf("Processing Ride Status Updates...")
+		return processRideAcceptedUpdate(ctx, *rideServer, consumer)
+	})
+
+	g.Go(func() error {
+		log.Printf("ride-service listening on port %d", *port)
+		if err := grpcServer.Serve(lis); err != nil {
+			return fmt.Errorf("gRPC serve: %w", err)
+		}
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		log.Fatalf("%v", err)
 	}
 
 }
+
+// Using an async call for matching and accepted. However, this might be useful for cancelled and other important synchronous states
+// func (s *rideServiceServer) UpdateRideStatus(ctx context.Context, request *ridepb.UpdateRideStatusRequest) (*ridepb.UpdateRideStatusResponse, error) {
+
+// 	rideID, err := uuid.Parse(request.GetRideId())
+// 	if err != nil {
+// 		return nil, status.Errorf(codes.InvalidArgument, "invalid rider ID: %v", err)
+// 	}
+// 	var ride ridedata.Ride
+// 	var qErr error
+// 	switch rideStatus := request.GetRideStatus(); rideStatus {
+// 	case *ridepb.RideStatus_RIDE_STATUS_MATCHING.Enum():
+// 		ride, qErr = s.queries.UpdateRideMatching(ctx, pgtype.UUID{Bytes: rideID, Valid: true})
+// 	// case *ridepb.RideStatus_RIDE_STATUS_MATCHED.Enum():
+// 	// 	ride, qErr = s.queries.UpdateRideMatched(ctx, pgtype.UUID{Bytes: rideID, Valid: true})
+// 	case *ridepb.RideStatus_RIDE_STATUS_ACCEPTED.Enum():
+// 		driverID, dErr := uuid.Parse(request.GetDriverId())
+// 		if dErr != nil {
+// 			return nil, status.Errorf(codes.InvalidArgument, "invalid driver ID: %v", dErr)
+// 		}
+// 		ride, qErr = s.queries.UpdateRideAccepted(ctx, ridedata.UpdateRideAcceptedParams{
+// 			ID:       pgtype.UUID{Bytes: rideID, Valid: true},
+// 			DriverID: pgtype.UUID{Bytes: driverID, Valid: true}})
+// 	default:
+// 		return nil, status.Errorf(codes.InvalidArgument, "unsupported ride status: %v", rideStatus)
+// 	}
+
+// 	if qErr != nil {
+// 		return nil, status.Errorf(codes.Internal, "failed to update ride status: %v", qErr)
+// 	}
+
+// 	return &ridepb.UpdateRideStatusResponse{
+// 		Ride: sqlcRidetoProtoRide(ride),
+// 	}, nil
+// }
