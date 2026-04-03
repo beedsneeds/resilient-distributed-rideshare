@@ -26,11 +26,11 @@ func (h *RideMatchingHandler) Handle(ctx context.Context, msg redis.XMessage) er
 	if err != nil {
 		return fmt.Errorf("invalid rideID: %v", err)
 	}
-	_, err = h.queries.UpdateRideMatching(ctx, pgtype.UUID{Bytes: rideID, Valid: true})
+	ride, err := h.queries.SetRideMatching(ctx, pgtype.UUID{Bytes: rideID, Valid: true})
 	if err != nil {
-		return fmt.Errorf("UpdateRideMatching failed: %v", err)
+		return fmt.Errorf("SetRideMatching failed: %v", err)
 	}
-	log.Printf("\nmessage ID: %s rideID: %s matched", msg.ID, rideID)
+	log.Printf("message ID: %s rideID: %s matched for rider %s", msg.ID, rideID, ride.RiderID)
 	return nil
 }
 
@@ -47,13 +47,13 @@ func (h *RideAcceptedHandler) Handle(ctx context.Context, msg redis.XMessage) er
 	if err != nil {
 		return fmt.Errorf("invalid driverID: %v", err)
 	}
-	_, err = h.queries.UpdateRideAccepted(ctx, ridedata.UpdateRideAcceptedParams{
+	ride, err := h.queries.SetRideAccepted(ctx, ridedata.SetRideAcceptedParams{
 		ID:       pgtype.UUID{Bytes: rideID, Valid: true},
 		DriverID: pgtype.UUID{Bytes: driverID, Valid: true}})
 	if err != nil {
-		return fmt.Errorf("UpdateRideAccepted failed: %v", err)
+		return fmt.Errorf("SetRideAccepted failed: %v", err)
 	}
-	log.Printf("\nmessage ID: %s rideID: %s accepted", msg.ID, rideID)
+	log.Printf("message ID: %s rideID: %s accepted driver %s", msg.ID, rideID, ride.DriverID)
 	return nil
 }
 
@@ -79,11 +79,11 @@ func processStream(ctx context.Context, s rideServiceServer, stream, consgroup, 
 			Consumer: consumer,
 			Streams:  []string{stream, currID},
 			Count:    1,
-			Block:    2 * time.Second,
+			Block:    5 * time.Second,
 		}).Result()
 		if err == redis.Nil {
 			// block timed out, no messages
-			fmt.Printf("\r[%s] [%s] No new messages", time.Now().Format("15:04:05"), stream)
+			log.Printf("[%s] [%s] No new messages", time.Now().Format("15:04:05"), stream)
 			continue
 		}
 		if err != nil {
@@ -100,20 +100,25 @@ func processStream(ctx context.Context, s rideServiceServer, stream, consgroup, 
 
 		if err := handler.Handle(ctx, message); err != nil {
 			log.Printf("handler error: %v", err)
+			// Switch back to backlog mode so the failed message (now in PEL)
+			// is retried on the next iteration instead of being skipped by ">".
+			checkBacklog = true
 			continue
 		}
 
 		err = s.messages.XAck(ctx, stream, consgroup, message.ID).Err()
 		if err != nil {
 			log.Printf("XAck failed for message %s: %v", message.ID, err)
+		} else {
+			log.Printf("[%s] Successfully processed message %s", stream, message.ID)
 		}
 		lastID = message.ID
 	}
 }
 
-func processRideMatchingUpdate(ctx context.Context, s rideServiceServer, consumer string) error {
+func processRideMatchingStatus(ctx context.Context, s rideServiceServer, consumer string) error {
 	return processStream(ctx, s, "ride.matching", "ride-group", consumer, &RideMatchingHandler{queries: s.queries})
 }
-func processRideAcceptedUpdate(ctx context.Context, s rideServiceServer, consumer string) error {
+func processRideAcceptedStatus(ctx context.Context, s rideServiceServer, consumer string) error {
 	return processStream(ctx, s, "ride.accepted", "ride-group", consumer, &RideAcceptedHandler{queries: s.queries})
 }

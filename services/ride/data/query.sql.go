@@ -11,6 +11,69 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimOutboxEvent = `-- name: ClaimOutboxEvent :one
+UPDATE outbox
+SET retrieved_at = NOW()
+WHERE id = (
+    SELECT id
+    FROM outbox
+    WHERE published_at IS NULL
+    AND (
+      retrieved_at IS NULL  -- fresh rows
+      OR retrieved_at < NOW() - INTERVAL '1 second' * $1 -- stale / timed out rows
+    )
+    ORDER BY created_at ASC
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1
+)
+RETURNING id, ride_id, stream, created_at, retrieved_at, published_at
+`
+
+func (q *Queries) ClaimOutboxEvent(ctx context.Context, dollar_1 interface{}) (Outbox, error) {
+	row := q.db.QueryRow(ctx, claimOutboxEvent, dollar_1)
+	var i Outbox
+	err := row.Scan(
+		&i.ID,
+		&i.RideID,
+		&i.Stream,
+		&i.CreatedAt,
+		&i.RetrievedAt,
+		&i.PublishedAt,
+	)
+	return i, err
+}
+
+const createOutboxEvent = `-- name: CreateOutboxEvent :one
+/* 
+* Deduplication and Outbox
+*/ 
+INSERT INTO outbox (
+  ride_id, stream
+) VALUES (
+  $1, $2
+) 
+RETURNING id, ride_id, stream, created_at, retrieved_at, published_at
+`
+
+type CreateOutboxEventParams struct {
+	RideID pgtype.UUID
+	Stream Stream
+}
+
+func (q *Queries) CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventParams) (Outbox, error) {
+	row := q.db.QueryRow(ctx, createOutboxEvent, arg.RideID, arg.Stream)
+	var i Outbox
+	err := row.Scan(
+		&i.ID,
+		&i.RideID,
+		&i.Stream,
+		&i.CreatedAt,
+		&i.RetrievedAt,
+		&i.PublishedAt,
+	)
+	return i, err
+}
+
 const createRide = `-- name: CreateRide :one
 INSERT INTO ride (
   id, rider_id
@@ -76,49 +139,6 @@ func (q *Queries) GetRide(ctx context.Context, id pgtype.UUID) (Ride, error) {
 	return i, err
 }
 
-const getStaleRidesByStatus = `-- name: GetStaleRidesByStatus :many
-/* 
-    Reconciliation Queries
-*/
-SELECT id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at FROM ride
-WHERE ride_status = $1
-  AND requested_at < NOW() - INTERVAL '1 second' * $2
-`
-
-type GetStaleRidesByStatusParams struct {
-	RideStatus Ridestatus
-	Column2    interface{}
-}
-
-func (q *Queries) GetStaleRidesByStatus(ctx context.Context, arg GetStaleRidesByStatusParams) ([]Ride, error) {
-	rows, err := q.db.Query(ctx, getStaleRidesByStatus, arg.RideStatus, arg.Column2)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Ride
-	for rows.Next() {
-		var i Ride
-		if err := rows.Scan(
-			&i.ID,
-			&i.RiderID,
-			&i.DriverID,
-			&i.RideStatus,
-			&i.RequestedAt,
-			&i.MatchingAt,
-			&i.MatchedAt,
-			&i.AcceptedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listRides = `-- name: ListRides :many
 SELECT id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at FROM ride
 ORDER BY requested_at
@@ -153,7 +173,71 @@ func (q *Queries) ListRides(ctx context.Context) ([]Ride, error) {
 	return items, nil
 }
 
-const updateRideAccepted = `-- name: UpdateRideAccepted :one
+const listStaleRides = `-- name: ListStaleRides :many
+/* 
+    Reconciliation Queries
+*/
+SELECT id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at FROM ride
+WHERE ride_status = $1
+  AND requested_at < NOW() - INTERVAL '1 second' * $2
+`
+
+type ListStaleRidesParams struct {
+	RideStatus Ridestatus
+	Column2    interface{}
+}
+
+func (q *Queries) ListStaleRides(ctx context.Context, arg ListStaleRidesParams) ([]Ride, error) {
+	rows, err := q.db.Query(ctx, listStaleRides, arg.RideStatus, arg.Column2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Ride
+	for rows.Next() {
+		var i Ride
+		if err := rows.Scan(
+			&i.ID,
+			&i.RiderID,
+			&i.DriverID,
+			&i.RideStatus,
+			&i.RequestedAt,
+			&i.MatchingAt,
+			&i.MatchedAt,
+			&i.AcceptedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setOutboxPublished = `-- name: SetOutboxPublished :one
+UPDATE outbox 
+SET published_at = NOW()
+WHERE id = $1
+RETURNING id, ride_id, stream, created_at, retrieved_at, published_at
+`
+
+func (q *Queries) SetOutboxPublished(ctx context.Context, id pgtype.UUID) (Outbox, error) {
+	row := q.db.QueryRow(ctx, setOutboxPublished, id)
+	var i Outbox
+	err := row.Scan(
+		&i.ID,
+		&i.RideID,
+		&i.Stream,
+		&i.CreatedAt,
+		&i.RetrievedAt,
+		&i.PublishedAt,
+	)
+	return i, err
+}
+
+const setRideAccepted = `-- name: SetRideAccepted :one
 UPDATE ride
 SET driver_id = $2,
     ride_status = 'accepted',
@@ -163,13 +247,13 @@ WHERE id = $1
 RETURNING id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at
 `
 
-type UpdateRideAcceptedParams struct {
+type SetRideAcceptedParams struct {
 	ID       pgtype.UUID
 	DriverID pgtype.UUID
 }
 
-func (q *Queries) UpdateRideAccepted(ctx context.Context, arg UpdateRideAcceptedParams) (Ride, error) {
-	row := q.db.QueryRow(ctx, updateRideAccepted, arg.ID, arg.DriverID)
+func (q *Queries) SetRideAccepted(ctx context.Context, arg SetRideAcceptedParams) (Ride, error) {
+	row := q.db.QueryRow(ctx, setRideAccepted, arg.ID, arg.DriverID)
 	var i Ride
 	err := row.Scan(
 		&i.ID,
@@ -184,7 +268,7 @@ func (q *Queries) UpdateRideAccepted(ctx context.Context, arg UpdateRideAccepted
 	return i, err
 }
 
-const updateRideMatched = `-- name: UpdateRideMatched :one
+const setRideMatched = `-- name: SetRideMatched :one
 /*
 * We aren't using this because we assume the human element in the transition of matched -> accepted 
 * does not exist and that it will always succeed. Will extend functionality later (maybe)
@@ -197,8 +281,8 @@ WHERE id = $1
 RETURNING id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at
 `
 
-func (q *Queries) UpdateRideMatched(ctx context.Context, id pgtype.UUID) (Ride, error) {
-	row := q.db.QueryRow(ctx, updateRideMatched, id)
+func (q *Queries) SetRideMatched(ctx context.Context, id pgtype.UUID) (Ride, error) {
+	row := q.db.QueryRow(ctx, setRideMatched, id)
 	var i Ride
 	err := row.Scan(
 		&i.ID,
@@ -213,7 +297,7 @@ func (q *Queries) UpdateRideMatched(ctx context.Context, id pgtype.UUID) (Ride, 
 	return i, err
 }
 
-const updateRideMatching = `-- name: UpdateRideMatching :one
+const setRideMatching = `-- name: SetRideMatching :one
 
 /* 
 * Don't condense into a single update to protect valid state transitions 
@@ -227,8 +311,8 @@ RETURNING id, rider_id, driver_id, ride_status, requested_at, matching_at, match
 `
 
 // TODO: check if 1) ride exists 2) the correct enum is being inserted
-func (q *Queries) UpdateRideMatching(ctx context.Context, id pgtype.UUID) (Ride, error) {
-	row := q.db.QueryRow(ctx, updateRideMatching, id)
+func (q *Queries) SetRideMatching(ctx context.Context, id pgtype.UUID) (Ride, error) {
+	row := q.db.QueryRow(ctx, setRideMatching, id)
 	var i Ride
 	err := row.Scan(
 		&i.ID,

@@ -36,7 +36,7 @@ const (
 // 1. the ride-service crashed between db write and redis XADD, so the ride was never published to the Redis stream
 // 2. Status was not updated to matching (not handled yet) - possibly a db failure
 func (r *reconciler) checkOrphanedRides(ctx context.Context) {
-	rides, err := r.rideQueries.GetStaleRidesByStatus(ctx, ridedata.GetStaleRidesByStatusParams{
+	rides, err := r.rideQueries.ListStaleRides(ctx, ridedata.ListStaleRidesParams{
 		RideStatus: ridedata.RidestatusRequested,
 		Column2:    staleRequestedThreshold,
 	})

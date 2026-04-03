@@ -11,6 +11,60 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const checkDedupEntry = `-- name: CheckDedupEntry :one
+SELECT id, ride_id, stream, processed_at FROM deduplication 
+WHERE ride_id = $1 
+    AND stream = $2
+`
+
+type CheckDedupEntryParams struct {
+	RideID pgtype.UUID
+	Stream Stream
+}
+
+func (q *Queries) CheckDedupEntry(ctx context.Context, arg CheckDedupEntryParams) (Deduplication, error) {
+	row := q.db.QueryRow(ctx, checkDedupEntry, arg.RideID, arg.Stream)
+	var i Deduplication
+	err := row.Scan(
+		&i.ID,
+		&i.RideID,
+		&i.Stream,
+		&i.ProcessedAt,
+	)
+	return i, err
+}
+
+const createDedupEntry = `-- name: CreateDedupEntry :one
+/* 
+* Deduplication and Outbox
+*/ 
+INSERT INTO deduplication (
+    ride_id, stream
+) VALUES (
+    $1, $2
+) ON CONFLICT (
+    ride_id, stream
+) DO NOTHING
+RETURNING id, ride_id, stream, processed_at
+`
+
+type CreateDedupEntryParams struct {
+	RideID pgtype.UUID
+	Stream Stream
+}
+
+func (q *Queries) CreateDedupEntry(ctx context.Context, arg CreateDedupEntryParams) (Deduplication, error) {
+	row := q.db.QueryRow(ctx, createDedupEntry, arg.RideID, arg.Stream)
+	var i Deduplication
+	err := row.Scan(
+		&i.ID,
+		&i.RideID,
+		&i.Stream,
+		&i.ProcessedAt,
+	)
+	return i, err
+}
+
 const createDriver = `-- name: CreateDriver :one
 INSERT INTO driver (
     name
@@ -154,6 +208,23 @@ SET status = 'available'
 
 func (q *Queries) ResetAllDriversToAvailable(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, resetAllDriversToAvailable)
+	return err
+}
+
+const setDedupProcessed = `-- name: SetDedupProcessed :exec
+UPDATE deduplication 
+SET processed_at = NOW()
+WHERE ride_id = $1 
+    AND stream = $2
+`
+
+type SetDedupProcessedParams struct {
+	RideID pgtype.UUID
+	Stream Stream
+}
+
+func (q *Queries) SetDedupProcessed(ctx context.Context, arg SetDedupProcessedParams) error {
+	_, err := q.db.Exec(ctx, setDedupProcessed, arg.RideID, arg.Stream)
 	return err
 }
 

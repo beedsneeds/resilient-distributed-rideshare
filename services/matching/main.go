@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"flag"
@@ -15,8 +16,8 @@ import (
 	matchingdata "github.com/beedsneeds/resilient-distributed-rideshare/services/matching/data"
 	"github.com/go-redsync/redsync/v4"
 	"github.com/go-redsync/redsync/v4/redis/goredis/v9"
-
-	// "github.com/google/uuid"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -36,12 +37,16 @@ var (
 
 type matchingServiceServer struct {
 	queries    *matchingdata.Queries
+	pgxpool    *pgxpool.Pool
 	messages   *redis.Client
 	rs         *redsync.Redsync
 	rideClient ridepb.RideServiceClient // Don't currently use it as everything is event-driven. Leaving it here for future expansion
 }
 
-func matchDriver(s matchingServiceServer) (matchingdata.Driver, error) {
+// Lock to prevent double assignment of a single driver
+// Dedup to prevent same ride from being matched twice
+// ALWAYS release both
+func matchDriver(s matchingServiceServer, rideID uuid.UUID) (matchingdata.Driver, error) {
 	// Hardcoding max number of drivers to offer requests
 	drivers, err := s.queries.GetNRandomAvailableDrivers(context.Background(), int32(5))
 	if err != nil {
@@ -73,21 +78,56 @@ func matchDriver(s matchingServiceServer) (matchingdata.Driver, error) {
 			continue
 		}
 
+		// Transaction: Update driver status and deduplicate
+		tx, err := s.pgxpool.BeginTx(ctx, pgx.TxOptions{})
+		if err != nil {
+			// should I pass on an error or log it?
+			mutex.Unlock()
+			return matchingdata.Driver{}, fmt.Errorf("Could not create db transaction: %v", err)
+		}
+		// defer tx.Rollback(ctx)
+		// Not using defer since its a loop. Instead we rollback on every error
+		qtx := s.queries.WithTx(tx)
+
+		// Deduplication
+		_, err = qtx.CreateDedupEntry(ctx, matchingdata.CreateDedupEntryParams{
+			RideID: pgtype.UUID{Bytes: rideID, Valid: true},
+			Stream: matchingdata.StreamRiderequested,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				tx.Rollback(ctx)
+				mutex.Unlock()
+				log.Printf("ride may have already matched %s, skipping", rideID)
+				break
+			} else {
+				tx.Rollback(ctx)
+				mutex.Unlock()
+				log.Printf("Deduplication table error: %v", err)
+				continue // should I let it retry despite a db error?
+			}
+		}
+
 		// Update driver status to busy
-		err = s.queries.UpdateDriverStatus(ctx, matchingdata.UpdateDriverStatusParams{
+		err = qtx.UpdateDriverStatus(ctx, matchingdata.UpdateDriverStatusParams{
 			ID:     pgtype.UUID{Bytes: driver.ID.Bytes, Valid: true},
 			Status: matchingdata.DriverstatusBusy,
 		})
 		if err != nil {
+			tx.Rollback(ctx)
 			mutex.Unlock()
 			return matchingdata.Driver{}, fmt.Errorf("UpdateDriverStatus failed: %v", err)
+		}
+
+		// Commit transaction
+		if err := tx.Commit(ctx); err != nil {
+			mutex.Unlock()
+			return matchingdata.Driver{}, fmt.Errorf("tx commit failed: %v", err)
 		}
 
 		// We assume driver is given 10s to accept/reject the ride
 		// For simplicity, driver will always accept
 		time.Sleep(3 * time.Second)
-
-		// TODO Publish driver accepted event or should it be a synchronous RPC?
 
 		// Release Lock
 		ok, err := mutex.Unlock()
@@ -126,11 +166,11 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 			Consumer: consumer,
 			Streams:  []string{"ride.requested", currID},
 			Count:    1,
-			Block:    2 * time.Second,
+			Block:    5 * time.Second,
 		}).Result()
 		if err == redis.Nil {
 			// block timed out, no messages
-			fmt.Printf("\r[%s] [ride.requested] No new messages", time.Now().Format("15:04:05"))
+			log.Printf("[%s] [ride.requested] No new messages", time.Now().Format("15:04:05"))
 
 			continue
 		}
@@ -145,14 +185,38 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 			continue
 		}
 		message := streams[0].Messages[0]
-		rideID := message.Values["rideID"].(string)
-		log.Printf("\nmessage ID: %s", message.ID)
+
+		rideID, err := uuid.Parse(message.Values["rideID"].(string))
+		if err != nil {
+			log.Printf("invalid rideID UUID %s: %v", rideID, err)
+			continue
+		}
+		// Deduplicate messages
+		_, err = s.queries.CheckDedupEntry(ctx, matchingdata.CheckDedupEntryParams{
+			RideID: pgtype.UUID{Bytes: rideID, Valid: true},
+			Stream: matchingdata.StreamRiderequested,
+		})
+		if err == nil {
+			// Ack and skip this message since duplicate entry found
+			// If there was no duplicate entry (i.e. fresh entry), we'd get a pgx.ErrNoRows
+			log.Printf("duplicate ride %s, skipping", rideID)
+			if err := s.messages.XAck(ctx, "ride.requested", consgroup, message.ID).Err(); err != nil {
+				log.Printf("XAck failed for message %s: %v", message.ID, err)
+			}
+			continue
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("Deduplication table error: %v", err)
+			continue
+		}
+
+		// TODO: its fine for this event to not need an outbox pattern as the reconciliation handles this?
 
 		// Publish an update to the Ride Status
 		xargs := redis.XAddArgs{
 			Stream: "ride.matching",
 			ID:     "*",
-			Values: []string{"rideID", rideID},
+			Values: []string{"rideID", rideID.String()},
 		}
 		err = s.messages.XAdd(ctx, &xargs).Err()
 		if err != nil {
@@ -160,9 +224,11 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 		}
 
 		// Match driver currently doesn't use rideID but it ideally takes rider location while matching
-		driver, err := matchDriver(s)
+		driver, err := matchDriver(s, rideID)
 		if err != nil {
 			if err.Error() == "Could not match" {
+				// Switch back to backlog mode so the failed message (now in PEL) is retried on the next iteration instead of being skipped by ">".
+				checkBacklog = true
 				continue
 			} else {
 				return err
@@ -170,11 +236,11 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 		}
 
 		// Publish an update to the Ride Status
-		log.Printf("\nDriver %v accepted ride with ID %v", driver, rideID)
+		log.Printf("Driver %v accepted ride with ID %v", driver, rideID)
 		xargs = redis.XAddArgs{
 			Stream: "ride.accepted",
 			ID:     "*",
-			Values: []string{"rideID", rideID, "driverID", driver.ID.String()},
+			Values: []string{"rideID", rideID.String(), "driverID", driver.ID.String()},
 		}
 		err = s.messages.XAdd(ctx, &xargs).Err()
 		if err != nil {
@@ -185,6 +251,8 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 
 		if err := s.messages.XAck(ctx, "ride.requested", consgroup, message.ID).Err(); err != nil {
 			log.Printf("XAck failed for message %s: %v", message.ID, err)
+		} else {
+			log.Printf("[ride.requested] Successfully processed message %s (rideID: %s)", message.ID, rideID)
 		}
 		lastID = message.ID
 	}
@@ -224,13 +292,13 @@ func main() {
 
 	s := &matchingServiceServer{
 		queries:    matchingdata.New(pgxpool),
+		pgxpool:    pgxpool,
 		messages:   rdsconn,
 		rs:         redsync.New(rspool),
 		rideClient: client,
 	}
 
 	// gRPC server to serve health check probes
-	// TODO: when I implement synchronous RPCs that are served in this gRPC server, use errgroup to manage both goroutine failures
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
@@ -242,8 +310,8 @@ func main() {
 	// Readiness goroutine that maintains service status by pinging dependencies
 	go func() {
 		time.Sleep(5 * time.Second)
-		err1 := pgxpool.Ping(context.Background())          // TODO: Should I add it to server struct??
-		err2 := s.messages.Ping(context.Background()).Err() // TODO: conversely, should I ping rdsconn instead?
+		err1 := s.pgxpool.Ping(context.Background())
+		err2 := s.messages.Ping(context.Background()).Err()
 		if err1 == nil && err2 == nil {
 			healthServer.SetServingStatus("readiness", grpc_health_v1.HealthCheckResponse_SERVING)
 		} else {

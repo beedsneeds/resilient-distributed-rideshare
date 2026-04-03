@@ -52,7 +52,7 @@ var rideStatusToProto = map[ridedata.Ridestatus]ridepb.RideStatus{
 	ridedata.RidestatusFailed:      ridepb.RideStatus_RIDE_STATUS_FAILED,
 }
 
-func sqlcRidetoProtoRide(r ridedata.Ride) *ridepb.Ride {
+func pgRidetoProtoRide(r ridedata.Ride) *ridepb.Ride {
 
 	var requestedAt *timestamppb.Timestamp
 	if r.RequestedAt.Valid {
@@ -84,30 +84,76 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 		return nil, status.Errorf(codes.InvalidArgument, "invalid rider ID: %v", err)
 	}
 
-	newRide, err := s.queries.CreateRide(ctx, ridedata.CreateRideParams{
+	// Atomically publish to outbox table while creating ride
+	tx, err := s.pgconn.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Could not create db transaction: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	qtx := s.queries.WithTx(tx)
+	newRide, err := qtx.CreateRide(ctx, ridedata.CreateRideParams{
 		ID:      pgtype.UUID{Bytes: newRideID, Valid: true},
 		RiderID: pgtype.UUID{Bytes: riderID, Valid: true},
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "CreateRide failed: %v", err)
 	}
+	_, err = qtx.CreateOutboxEvent(ctx, ridedata.CreateOutboxEventParams{
+		RideID: pgtype.UUID{Bytes: newRideID, Valid: true},
+		Stream: ridedata.StreamRiderequested,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "CreateOutboxEvent failed: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, status.Errorf(codes.Internal, "commit failed: %v", err)
+	}
 
 	// What if service dies here?
 
-	// This is reused in reconciliation/main.go
-	xargs := redis.XAddArgs{
-		Stream: "ride.requested",
-		ID:     "*",
-		Values: []string{"rideID", newRideID.String()},
-	}
-	err = s.messages.XAdd(ctx, &xargs).Err()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to publish ride event: %v", err)
-	}
+	// xargs := redis.XAddArgs{
+	// 	Stream: "ride.requested",
+	// 	ID:     "*",
+	// 	Values: []string{"rideID", newRideID.String()},
+	// }
+	// err = s.messages.XAdd(ctx, &xargs).Err()
+	// if err != nil {
+	// 	return nil, status.Errorf(codes.Internal, "failed to publish ride event: %v", err)
+	// }
 
 	return &ridepb.RequestRideResponse{
-		Ride: sqlcRidetoProtoRide(newRide),
+		Ride: pgRidetoProtoRide(newRide),
 	}, nil
+}
+
+func publishOutbox(ctx context.Context, s rideServiceServer) error {
+	const outboxTimeOut = 30
+	// // This is reused in reconciliation/main.go
+	for {
+		event, err := s.queries.ClaimOutboxEvent(ctx, outboxTimeOut)
+		if err == pgx.ErrNoRows {
+			time.Sleep(time.Second)
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("Query GetOutboxRow failed: %v", err)
+		}
+
+		xargs := redis.XAddArgs{
+			Stream: string(event.Stream),
+			ID:     "*",
+			Values: []string{"rideID", event.RideID.String()},
+		}
+		err = s.messages.XAdd(ctx, &xargs).Err()
+		if err != nil {
+			log.Printf("failed to publish ride event: %v", err)
+			continue
+		}
+		_, err = s.queries.SetOutboxPublished(ctx, event.ID)
+		if err != nil {
+			log.Printf("Query SetOutboxPublished failed: %v", err)
+		}
+	}
 }
 
 func newServer() (*rideServiceServer, error) {
@@ -172,13 +218,18 @@ func main() {
 	// Consume messages
 	g.Go(func() error {
 		const consumer = "ride-1" // TODO don't hard code this
-		log.Printf("Processing Ride Status Updates...")
-		return processRideMatchingUpdate(ctx, *rideServer, consumer)
+		log.Printf("Processing Ride Matching Status Updates...")
+		return processRideMatchingStatus(ctx, *rideServer, consumer)
 	})
 	g.Go(func() error {
 		const consumer = "ride-1" // TODO don't hard code this
-		log.Printf("Processing Ride Status Updates...")
-		return processRideAcceptedUpdate(ctx, *rideServer, consumer)
+		log.Printf("Processing Ride Accepted Status Updates...")
+		return processRideAcceptedStatus(ctx, *rideServer, consumer)
+	})
+	// Outbox publisher
+	g.Go(func() error {
+		log.Printf("Publishing New Rides...")
+		return publishOutbox(ctx, *rideServer)
 	})
 
 	g.Go(func() error {
@@ -195,7 +246,7 @@ func main() {
 
 }
 
-// Using an async call for matching and accepted. However, this might be useful for cancelled and other important synchronous states
+// Using an async call for matching and accepted. However, this might be useful for cancelled and other important synchronous states, so I'll leave it
 // func (s *rideServiceServer) UpdateRideStatus(ctx context.Context, request *ridepb.UpdateRideStatusRequest) (*ridepb.UpdateRideStatusResponse, error) {
 
 // 	rideID, err := uuid.Parse(request.GetRideId())
@@ -226,6 +277,6 @@ func main() {
 // 	}
 
 // 	return &ridepb.UpdateRideStatusResponse{
-// 		Ride: sqlcRidetoProtoRide(ride),
+// 		Ride: pgRidetoProtoRide(ride),
 // 	}, nil
 // }

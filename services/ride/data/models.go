@@ -60,6 +60,56 @@ func (ns NullRidestatus) Value() (driver.Value, error) {
 	return string(ns.Ridestatus), nil
 }
 
+type Stream string
+
+const (
+	StreamRiderequested Stream = "ride.requested"
+)
+
+func (e *Stream) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = Stream(s)
+	case string:
+		*e = Stream(s)
+	default:
+		return fmt.Errorf("unsupported scan type for Stream: %T", src)
+	}
+	return nil
+}
+
+type NullStream struct {
+	Stream Stream
+	Valid  bool // Valid is true if Stream is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullStream) Scan(value interface{}) error {
+	if value == nil {
+		ns.Stream, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.Stream.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullStream) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.Stream), nil
+}
+
+type Outbox struct {
+	ID          pgtype.UUID
+	RideID      pgtype.UUID
+	Stream      Stream
+	CreatedAt   pgtype.Timestamp
+	RetrievedAt pgtype.Timestamp
+	PublishedAt pgtype.Timestamp
+}
+
 type Ride struct {
 	ID          pgtype.UUID
 	RiderID     pgtype.UUID
