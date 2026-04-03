@@ -93,7 +93,7 @@ func (q *Queries) DeleteDriver(ctx context.Context, id pgtype.UUID) error {
 
 const getBusyDrivers = `-- name: GetBusyDrivers :many
 /* 
-    Reconciliation Queries
+    reconciler Queries
 */
 SELECT id, name, status FROM driver
 WHERE status = 'busy'

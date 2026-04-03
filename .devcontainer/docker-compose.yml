@@ -40,14 +40,14 @@ services:
   # SERVICES
   # ============================================
 
-  reconciliation-service:
+  reconciler-service:
     build:
       context: ..
-      dockerfile: services/reconciliation/Dockerfile
+      dockerfile: services/reconciler/Dockerfile
     env_file:
       - .env
     environment:
-      - SERVICE_NAME=reconciliation-service
+      - SERVICE_NAME=reconciler-service
       - RIDE_DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ride-db:5432/ride_db
       - MATCHING_DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@matching-db:5432/matching_db
       - REDIS_ADDR=redis:6379

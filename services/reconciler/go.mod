@@ -1,4 +1,4 @@
-module github.com/beedsneeds/resilient-distributed-rideshare/services/reconciliation
+module github.com/beedsneeds/resilient-distributed-rideshare/services/reconciler
 
 go 1.25.8
 

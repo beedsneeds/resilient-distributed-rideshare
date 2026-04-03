@@ -128,7 +128,7 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 
 func publishOutbox(ctx context.Context, s rideServiceServer) error {
 	const outboxTimeOut = 30
-	// // This is reused in reconciliation/main.go
+	// // This is reused in reconciler/main.go
 	for {
 		event, err := s.queries.ClaimOutboxEvent(ctx, outboxTimeOut)
 		if err == pgx.ErrNoRows {

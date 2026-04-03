@@ -98,7 +98,7 @@ WHERE id = $1
 RETURNING *;
 
 /* 
-    Reconciliation Queries
+    reconciler Queries
 */
 -- name: ListStaleRides :many
 SELECT * FROM ride

@@ -21,7 +21,7 @@ type reconciler struct {
 
 // Tunable: determine how old a state must be before its considered stale
 const (
-	duplicateRideThreshold  = 60
+	// duplicateRideThreshold  = 60
 	staleRequestedThreshold = 60 // rides in "requested" status that have no stream event (in seconds)
 	// // TODO update driver details in ride
 	// // staleMatchingThreshold = 120 // rides stuck in matching (what about matched)
@@ -30,6 +30,22 @@ const (
 )
 
 // Duplicated rides: When more than one ride is created for the same person within duplicateRideThreshold seconds
+// We move all but the earliest into a terminal state (failed)
+// func (r *reconciler) checkDuplicatedRides(ctx context.Context) {
+// 	rides, err := r.rideQueries.GetDuplicatedRides(ctx, duplicateRideThreshold)
+// 	if err != nil {
+// 		log.Printf("ERROR checking duplicated rides: %v", err)
+// 		return
+// 	}
+// 	if len(rides) == 0 {
+// 		log.Printf("Duplicate rides: none found")
+// 		return
+// 	}
+// 	for _, ride := range rides {
+
+// 	}
+
+// }
 
 // Orphaned rides: When a ride is written to Postgres but its been staleRequestedThreshold seconds since it was requested
 // Occurs when
@@ -69,7 +85,7 @@ func (r *reconciler) checkOrphanedRides(ctx context.Context) {
 }
 
 func (r *reconciler) reconciliate(ctx context.Context) {
-	log.Printf("[RECONCILIATOR] Starting reconciliation")
+	log.Printf("[RECONCILIATOR] Starting reconciler")
 	for {
 		log.Printf("[RECONCILIATOR] ==  Running Checks  ==")
 		r.checkOrphanedRides(ctx)

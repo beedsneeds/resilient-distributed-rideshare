@@ -210,7 +210,7 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 			continue
 		}
 
-		// TODO: its fine for this event to not need an outbox pattern as the reconciliation handles this?
+		// TODO: its fine for this event to not need an outbox pattern as the reconciler handles this?
 
 		// Publish an update to the Ride Status
 		xargs := redis.XAddArgs{

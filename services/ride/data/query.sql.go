@@ -175,7 +175,7 @@ func (q *Queries) ListRides(ctx context.Context) ([]Ride, error) {
 
 const listStaleRides = `-- name: ListStaleRides :many
 /* 
-    Reconciliation Queries
+    reconciler Queries
 */
 SELECT id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at FROM ride
 WHERE ride_status = $1

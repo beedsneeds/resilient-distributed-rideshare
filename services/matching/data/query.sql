@@ -69,7 +69,7 @@ WHERE ride_id = $1
 
 
 /* 
-    Reconciliation Queries
+    reconciler Queries
 */
 -- name: GetBusyDrivers :many
 SELECT * FROM driver
