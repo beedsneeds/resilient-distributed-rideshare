@@ -1,7 +1,7 @@
-github.com/beedsneeds/resilient-distributed-rideshare/services/matching v0.0.0-20260321163956-4e331d219b22 h1:yxP58IRWigZ0dWaXtq3yDb6OPAS5Q0fdAi0yy0+2LTI=
-github.com/beedsneeds/resilient-distributed-rideshare/services/matching v0.0.0-20260321163956-4e331d219b22/go.mod h1:AuvJLYNxyWBJyzUEvv+APzqouR+imvDx0kcO/PMJ/bY=
-github.com/beedsneeds/resilient-distributed-rideshare/services/ride v0.0.0-20260321163956-4e331d219b22 h1:fcQYnbKVzVI422oa/uMXAxhGh/8UNpV82Ha2pOK7eGg=
-github.com/beedsneeds/resilient-distributed-rideshare/services/ride v0.0.0-20260321163956-4e331d219b22/go.mod h1:F2XoBs+f83MwMRhWTbrWohMTKyzqon1qkelhmzEDJjo=
+github.com/beedsneeds/resilient-distributed-rideshare/services/matching v0.0.0-20260404012228-ced8cbd5f9d9 h1:+Zmo/F4gMg9frtTioqOHVXzXGn+MK4rideFwMQKMetM=
+github.com/beedsneeds/resilient-distributed-rideshare/services/matching v0.0.0-20260404012228-ced8cbd5f9d9/go.mod h1:33zgWT6lYNOMHzfcqHu+JxU0lDjGznhd+0CHAt3TBOo=
+github.com/beedsneeds/resilient-distributed-rideshare/services/ride v0.0.0-20260404012228-ced8cbd5f9d9 h1:mUlX+9z75JU/KWkVMsTkK6OTSGn6PoyFuyufRrsmR1c=
+github.com/beedsneeds/resilient-distributed-rideshare/services/ride v0.0.0-20260404012228-ced8cbd5f9d9/go.mod h1:Ps5GP3wbTsHzRN/AZcajkJBvsUhJiGlkdeZC8Fsb3Xo=
 github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=
 github.com/bsm/ginkgo/v2 v2.12.0/go.mod h1:SwYbGRRDovPVboqFv0tPTcG1sN61LM1Z4ARdbAV9g4c=
 github.com/bsm/gomega v1.27.10 h1:yeMWxP2pV2fG3FgAODIY8EiRE3dy0aeFYt4l7wh6yKA=
@@ -17,8 +17,8 @@ github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsI
 github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=
 github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 h1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=
 github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761/go.mod h1:5TJZWKEWniPve33vlWYSoGYefn3gLQRzjfDlhSJ9ZKM=
-github.com/jackc/pgx/v5 v5.8.0 h1:TYPDoleBBme0xGSAX3/+NujXXtpZn9HBONkQC7IEZSo=
-github.com/jackc/pgx/v5 v5.8.0/go.mod h1:QVeDInX2m9VyzvNeiCJVjCkNFqzsNb43204HshNSZKw=
+github.com/jackc/pgx/v5 v5.9.1 h1:uwrxJXBnx76nyISkhr33kQLlUqjv7et7b9FjCen/tdc=
+github.com/jackc/pgx/v5 v5.9.1/go.mod h1:mal1tBGAFfLHvZzaYh77YS/eC6IX9OWbRV1QIIM0Jn4=
 github.com/jackc/puddle/v2 v2.2.2 h1:PR8nw+E/1w0GLuRFSmiioY6UooMp6KJv0/61nB7icHo=
 github.com/jackc/puddle/v2 v2.2.2/go.mod h1:vriiEXHvEE654aYKXXjOvZM39qJ0q+azkZFrfEOc3H4=
 github.com/klauspost/cpuid/v2 v2.0.9 h1:lgaqFMSdTdQYdZ04uHyN2d/eKdOMyi2YLSvlQIBFYa4=

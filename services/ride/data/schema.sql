@@ -28,6 +28,14 @@ CREATE TABLE ride(
     accepted_at     TIMESTAMP
 );
 
+CREATE TABLE deduplication (
+    id              UUID                PRIMARY KEY DEFAULT gen_random_uuid(),
+    ride_id         UUID NOT NULL,                
+    stream          stream NOT NULL,
+    processed_at    TIMESTAMP,
+    UNIQUE (ride_id, stream) -- composite key that identifies a unique ride having only one unique operation
+);
+
 CREATE TABLE outbox (
     id          UUID   PRIMARY KEY DEFAULT gen_random_uuid(), 
     ride_id          UUID NOT NULL, -- not using ride_id as pk because I'll add other event types, so ride_id won't be unique

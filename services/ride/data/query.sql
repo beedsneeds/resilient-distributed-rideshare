@@ -40,7 +40,31 @@ DELETE FROM ride
 WHERE id = $1;
 
 /* 
-* Deduplication and Outbox
+* Deduplication
+*/ 
+-- name: CreateDedupEntry :one
+INSERT INTO deduplication (
+    ride_id, stream
+) VALUES (
+    $1, $2
+) ON CONFLICT (
+    ride_id, stream
+) DO NOTHING
+RETURNING *;
+
+-- name: CheckDedupEntry :one
+SELECT * FROM deduplication
+WHERE ride_id = $1
+  AND stream = $2;
+
+-- name: SetDedupProcessed :exec
+UPDATE deduplication 
+SET processed_at = NOW()
+WHERE ride_id = $1 
+    AND stream = $2;
+
+/* 
+* Outbox
 */ 
 -- name: CreateOutboxEvent :one
 INSERT INTO outbox (
@@ -67,7 +91,7 @@ WHERE id = (
 )
 RETURNING *;
 
--- name: SetOutboxPublished :one
+-- name: SetOutboxPublished :exec
 UPDATE outbox 
 SET published_at = NOW()
 WHERE id = $1

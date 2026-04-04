@@ -2,50 +2,70 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
 
+	// matchingdata "github.com/beedsneeds/resilient-distributed-rideshare/services/matching/data"
 	ridedata "github.com/beedsneeds/resilient-distributed-rideshare/services/ride/data"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/redis/go-redis/v9"
 )
 
-type StreamHandler interface {
-	Handle(ctx context.Context, msg redis.XMessage) error
+// Closure
+func processRideAcceptedStatus(ctx context.Context, s *rideServiceServer, consumer string) error {
+	const stream, consgroup = "ride.accepted", "ride-group"
+	return processStream(ctx, s, stream, consgroup, consumer, func(ctx context.Context, msg redis.XMessage) error {
+		rideID, err := uuid.Parse(msg.Values["rideID"].(string))
+		if err != nil {
+			return fmt.Errorf("invalid rideID: %v", err)
+		}
+		driverID, err := uuid.Parse(msg.Values["driverID"].(string))
+		if err != nil {
+			return fmt.Errorf("invalid driverID: %v", err)
+		}
+
+		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+		if err != nil {
+			return fmt.Errorf("Could not create db transaction: %v", err)
+		}
+		defer tx.Rollback(ctx)
+
+		qtx := s.queries.WithTx(tx)
+
+		// Deduplication
+		_, err = qtx.CreateDedupEntry(ctx, ridedata.CreateDedupEntryParams{
+			RideID: pgtype.UUID{Bytes: rideID, Valid: true},
+			Stream: ridedata.StreamRideaccepted,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				log.Printf("ride may have already matched %s, skipping", rideID)
+				return nil
+			}
+			return fmt.Errorf("Deduplication table error: %v", err) // should I let it retry despite a db error?
+		}
+
+		ride, err := qtx.SetRideAccepted(ctx, ridedata.SetRideAcceptedParams{
+			ID:       pgtype.UUID{Bytes: rideID, Valid: true},
+			DriverID: pgtype.UUID{Bytes: driverID, Valid: true}})
+		if err != nil {
+			return fmt.Errorf("SetRideAccepted failed: %v", err)
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("tx commit failed: %v", err)
+		}
+
+		log.Printf("message ID: %s rideID: %s accepted driver %s", msg.ID, rideID, ride.DriverID)
+		return nil
+	})
 }
 
-// Implements Handle
-type RideAcceptedHandler struct {
-	queries *ridedata.Queries
-}
-
-func (h *RideAcceptedHandler) Handle(ctx context.Context, msg redis.XMessage) error {
-	rideID, err := uuid.Parse(msg.Values["rideID"].(string))
-	if err != nil {
-		return fmt.Errorf("invalid rideID: %v", err)
-	}
-	driverID, err := uuid.Parse(msg.Values["driverID"].(string))
-	if err != nil {
-		return fmt.Errorf("invalid driverID: %v", err)
-	}
-	ride, err := h.queries.SetRideAccepted(ctx, ridedata.SetRideAcceptedParams{
-		ID:       pgtype.UUID{Bytes: rideID, Valid: true},
-		DriverID: pgtype.UUID{Bytes: driverID, Valid: true}})
-	if err != nil {
-		return fmt.Errorf("SetRideAccepted failed: %v", err)
-	}
-	log.Printf("message ID: %s rideID: %s accepted driver %s", msg.ID, rideID, ride.DriverID)
-	return nil
-}
-
-func processRideAcceptedStatus(ctx context.Context, s rideServiceServer, consumer string) error {
-	return processStream(ctx, s, "ride.accepted", "ride-group", consumer, &RideAcceptedHandler{queries: s.queries})
-}
-
-// Polymorphism but with the same flow as matching/main
-func processStream(ctx context.Context, s rideServiceServer, stream, consgroup, consumer string, handler StreamHandler) error {
+func processStream(ctx context.Context, s *rideServiceServer, stream, consgroup, consumer string, handle func(context.Context, redis.XMessage) error) error {
 	checkBacklog := true
 	lastID := "0"
 
@@ -85,7 +105,7 @@ func processStream(ctx context.Context, s rideServiceServer, stream, consgroup, 
 		}
 		message := streams[0].Messages[0]
 
-		if err := handler.Handle(ctx, message); err != nil {
+		if err := handle(ctx, message); err != nil {
 			log.Printf("handler error: %v", err)
 			// Switch back to backlog mode so the failed message (now in PEL)
 			// is retried on the next iteration instead of being skipped by ">".
@@ -102,24 +122,3 @@ func processStream(ctx context.Context, s rideServiceServer, stream, consgroup, 
 		lastID = message.ID
 	}
 }
-
-// type RideMatchingHandler struct {
-// 	queries *ridedata.Queries
-// }
-
-// func (h *RideMatchingHandler) Handle(ctx context.Context, msg redis.XMessage) error {
-// 	rideID, err := uuid.Parse(msg.Values["rideID"].(string))
-// 	if err != nil {
-// 		return fmt.Errorf("invalid rideID: %v", err)
-// 	}
-// 	ride, err := h.queries.SetRideMatching(ctx, pgtype.UUID{Bytes: rideID, Valid: true})
-// 	if err != nil {
-// 		return fmt.Errorf("SetRideMatching failed: %v", err)
-// 	}
-// 	log.Printf("message ID: %s rideID: %s matched for rider %s", msg.ID, rideID, ride.RiderID)
-// 	return nil
-// }
-
-// func processRideMatchingStatus(ctx context.Context, s rideServiceServer, consumer string) error {
-// 	return processStream(ctx, s, "ride.matching", "ride-group", consumer, &RideMatchingHandler{queries: s.queries})
-// }

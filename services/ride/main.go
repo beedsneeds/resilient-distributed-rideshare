@@ -142,8 +142,8 @@ func publishOutboxEvents(ctx context.Context, s rideServiceServer) error {
 			log.Printf("failed to publish ride event: %v", err)
 			continue
 		}
-		_, err = s.queries.SetOutboxPublished(ctx, event.ID)
-		if err != nil {
+
+		if err = s.queries.SetOutboxPublished(ctx, event.ID); err != nil {
 			log.Printf("Query SetOutboxPublished failed: %v", err)
 		}
 	}
@@ -217,7 +217,7 @@ func main() {
 	g.Go(func() error {
 		const consumer = "ride-1" // TODO don't hard code this
 		log.Printf("Processing Ride Accepted Status Updates...")
-		return processRideAcceptedStatus(ctx, *rideServer, consumer)
+		return processRideAcceptedStatus(ctx, rideServer, consumer)
 	})
 	// Outbox publisher
 	g.Go(func() error {
@@ -225,6 +225,7 @@ func main() {
 		return publishOutboxEvents(ctx, *rideServer)
 	})
 
+	// Serving gRPC requests
 	g.Go(func() error {
 		log.Printf("ride-service listening on port %d", *port)
 		if err := grpcServer.Serve(lis); err != nil {

@@ -34,9 +34,42 @@ func (q *Queries) CheckDedupEntry(ctx context.Context, arg CheckDedupEntryParams
 	return i, err
 }
 
+const claimOutboxEvent = `-- name: ClaimOutboxEvent :one
+UPDATE outbox
+SET retrieved_at = NOW()
+WHERE id = (
+    SELECT id
+    FROM outbox
+    WHERE published_at IS NULL
+    AND (
+      retrieved_at IS NULL  -- fresh rows
+      OR retrieved_at < NOW() - INTERVAL '1 second' * $1 -- stale / timed out rows
+    )
+    ORDER BY created_at ASC
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1
+)
+RETURNING id, ride_id, stream, payload, created_at, retrieved_at, published_at
+`
+
+func (q *Queries) ClaimOutboxEvent(ctx context.Context, dollar_1 interface{}) (Outbox, error) {
+	row := q.db.QueryRow(ctx, claimOutboxEvent, dollar_1)
+	var i Outbox
+	err := row.Scan(
+		&i.ID,
+		&i.RideID,
+		&i.Stream,
+		&i.Payload,
+		&i.CreatedAt,
+		&i.RetrievedAt,
+		&i.PublishedAt,
+	)
+	return i, err
+}
+
 const createDedupEntry = `-- name: CreateDedupEntry :one
 /* 
-* Deduplication and Outbox
+* Deduplication
 */ 
 INSERT INTO deduplication (
     ride_id, stream
@@ -82,25 +115,31 @@ func (q *Queries) CreateDriver(ctx context.Context, name string) (Driver, error)
 }
 
 const createOutboxEvent = `-- name: CreateOutboxEvent :one
+/*
+* Outbox
+*/
+
 INSERT INTO outbox (
-    ride_id, stream
+    ride_id, stream, payload
 ) VALUES (
-    $1, $2
-) RETURNING id, ride_id, stream, created_at, retrieved_at, published_at
+    $1, $2, $3
+) RETURNING id, ride_id, stream, payload, created_at, retrieved_at, published_at
 `
 
 type CreateOutboxEventParams struct {
-	RideID pgtype.UUID
-	Stream NullStream
+	RideID  pgtype.UUID
+	Stream  Stream
+	Payload []byte
 }
 
 func (q *Queries) CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventParams) (Outbox, error) {
-	row := q.db.QueryRow(ctx, createOutboxEvent, arg.RideID, arg.Stream)
+	row := q.db.QueryRow(ctx, createOutboxEvent, arg.RideID, arg.Stream, arg.Payload)
 	var i Outbox
 	err := row.Scan(
 		&i.ID,
 		&i.RideID,
 		&i.Stream,
+		&i.Payload,
 		&i.CreatedAt,
 		&i.RetrievedAt,
 		&i.PublishedAt,
@@ -252,6 +291,17 @@ type SetDedupProcessedParams struct {
 
 func (q *Queries) SetDedupProcessed(ctx context.Context, arg SetDedupProcessedParams) error {
 	_, err := q.db.Exec(ctx, setDedupProcessed, arg.RideID, arg.Stream)
+	return err
+}
+
+const setOutboxPublished = `-- name: SetOutboxPublished :exec
+UPDATE outbox 
+SET published_at = NOW()
+WHERE id = $1
+`
+
+func (q *Queries) SetOutboxPublished(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, setOutboxPublished, id)
 	return err
 }
 

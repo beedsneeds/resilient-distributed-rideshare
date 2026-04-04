@@ -21,14 +21,15 @@ CREATE TABLE deduplication (
     ride_id         UUID NOT NULL,                
     stream          stream NOT NULL,
     processed_at    TIMESTAMP,
-    UNIQUE (ride_id, stream) -- composite key that identifies a unique ride having only one unique operation
+    UNIQUE (ride_id, stream)
 );
 
 CREATE TABLE outbox (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     ride_id         UUID NOT NULL,
-    stream          stream,
+    stream          stream NOT NULL,
+    payload         JSONB,
     created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
     retrieved_at    TIMESTAMP,
     published_at    TIMESTAMP
-)
+);

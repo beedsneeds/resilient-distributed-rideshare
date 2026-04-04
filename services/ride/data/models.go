@@ -96,6 +96,13 @@ func (ns NullStream) Value() (driver.Value, error) {
 	return string(ns.Stream), nil
 }
 
+type Deduplication struct {
+	ID          pgtype.UUID
+	RideID      pgtype.UUID
+	Stream      Stream
+	ProcessedAt pgtype.Timestamp
+}
+
 type Outbox struct {
 	ID          pgtype.UUID
 	RideID      pgtype.UUID

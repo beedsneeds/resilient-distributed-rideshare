@@ -112,7 +112,8 @@ type Driver struct {
 type Outbox struct {
 	ID          pgtype.UUID
 	RideID      pgtype.UUID
-	Stream      NullStream
+	Stream      Stream
+	Payload     []byte
 	CreatedAt   pgtype.Timestamp
 	RetrievedAt pgtype.Timestamp
 	PublishedAt pgtype.Timestamp

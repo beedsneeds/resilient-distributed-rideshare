@@ -52,35 +52,35 @@ const (
 // 1. the ride-service crashed between db write and redis XADD, so the ride was never published to the Redis stream
 // 2. Status was not updated to matching (not handled yet) - possibly a db failure
 func (r *reconciler) checkOrphanedRides(ctx context.Context) {
-	rides, err := r.rideQueries.ListStaleRides(ctx, ridedata.ListStaleRidesParams{
-		RideStatus: ridedata.RidestatusRequested,
-		Column2:    staleRequestedThreshold,
-	})
-	if err != nil {
-		log.Printf("ERROR checking orphaned rides: %v", err)
-		return
-	}
-	if len(rides) == 0 {
-		log.Printf("Orphaned rides: none found")
-		return
-	}
-	for _, ride := range rides {
+	// rides, err := r.rideQueries.ListStaleRides(ctx, ridedata.ListStaleRidesParams{
+	// 	RideStatus: ridedata.RidestatusRequested,
+	// 	Column2:    staleRequestedThreshold,
+	// })
+	// if err != nil {
+	// 	log.Printf("ERROR checking orphaned rides: %v", err)
+	// 	return
+	// }
+	// if len(rides) == 0 {
+	// 	log.Printf("Orphaned rides: none found")
+	// 	return
+	// }
+	// for _, ride := range rides {
 
-		log.Printf("ORPHANED RIDE: id=%x status=%s requested_at=%v",
-			ride.ID.Bytes, ride.RideStatus, ride.RequestedAt.Time)
+	// 	log.Printf("ORPHANED RIDE: id=%x status=%s requested_at=%v",
+	// 		ride.ID.Bytes, ride.RideStatus, ride.RequestedAt.Time)
 
-		// xargs := redis.XAddArgs{
-		// 	Stream: "ride.requested",
-		// 	ID:     "*",
-		// 	Values: []string{"rideID", ride.ID.String()},
-		// 	// TODO idempotency with IDMP
-		// }
-		// err = r.messages.XAdd(ctx, &xargs).Err()
-		// if err != nil {
-		// 	log.Printf("failed to publish ride event: %v", err)
-		// }
-	}
-	log.Printf("Orphaned rides: %d found", len(rides))
+	// 	// xargs := redis.XAddArgs{
+	// 	// 	Stream: "ride.requested",
+	// 	// 	ID:     "*",
+	// 	// 	Values: []string{"rideID", ride.ID.String()},
+	// 	// 	// TODO idempotency with IDMP
+	// 	// }
+	// 	// err = r.messages.XAdd(ctx, &xargs).Err()
+	// 	// if err != nil {
+	// 	// 	log.Printf("failed to publish ride event: %v", err)
+	// 	// }
+	// }
+	// log.Printf("Orphaned rides: %d found", len(rides))
 
 }
 

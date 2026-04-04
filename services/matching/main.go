@@ -11,6 +11,7 @@ import (
 
 	"net"
 
+	"encoding/json"
 	"golang.org/x/sync/errgroup"
 
 	matchingdata "github.com/beedsneeds/resilient-distributed-rideshare/services/matching/data"
@@ -43,10 +44,82 @@ type matchingServiceServer struct {
 	rideClient ridepb.RideServiceClient // Don't currently use it as everything is event-driven. Leaving it here for future expansion
 }
 
+var errAlreadyMatched = errors.New("already matched")
+var errTryNext = errors.New("try next driver")
+
+// tryDriver attempts to match a single driver to a ride. Extracted into its own function to make use of defer
+// Returns errAlreadyMatched if the ride was already matched (stop iterating),
+// errTryNext if this driver couldn't be used (try the next one),
+// or a real error if something unrecoverable happened.
+func tryDriver(s matchingServiceServer, ctx context.Context, rideID uuid.UUID, driver matchingdata.Driver) (matchingdata.Driver, error) {
+	payload, err := json.Marshal(map[string]string{"driverID": driver.ID.String()})
+	if err != nil {
+		return matchingdata.Driver{}, fmt.Errorf("marshal payload: %v", err)
+	}
+
+	mutex := s.rs.NewMutex(
+		fmt.Sprintf("mutex-driver-%v", driver.ID.String()),
+		redsync.WithExpiry(30*time.Second),
+	)
+	if err := mutex.Lock(); err != nil {
+		log.Printf("Lock acquisition error: %v", err)
+		return matchingdata.Driver{}, errTryNext
+	}
+	defer mutex.Unlock()
+
+	// We assume driver is given 10s to accept/reject the ride
+	// For simplicity, driver will always accept
+	time.Sleep(3 * time.Second)
+
+	// Begin Transaction: deduplicate, Update driver status, write to outbox
+	tx, err := s.pgxpool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return matchingdata.Driver{}, fmt.Errorf("Could not create db transaction: %v", err)
+	}
+	defer tx.Rollback(ctx) // no-op after Commit
+
+	qtx := s.queries.WithTx(tx)
+
+	// Deduplication
+	_, err = qtx.CreateDedupEntry(ctx, matchingdata.CreateDedupEntryParams{
+		RideID: pgtype.UUID{Bytes: rideID, Valid: true},
+		Stream: matchingdata.StreamRiderequested,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("ride may have already matched %s, skipping", rideID)
+			return matchingdata.Driver{}, errAlreadyMatched
+		}
+		log.Printf("Deduplication table error: %v", err)
+		return matchingdata.Driver{}, errTryNext // should I let it retry despite a db error?
+	}
+
+	// Update driver status to busy
+	if err = qtx.UpdateDriverStatus(ctx, matchingdata.UpdateDriverStatusParams{
+		ID:     pgtype.UUID{Bytes: driver.ID.Bytes, Valid: true},
+		Status: matchingdata.DriverstatusBusy,
+	}); err != nil {
+		return matchingdata.Driver{}, fmt.Errorf("UpdateDriverStatus failed: %v", err)
+	}
+
+	if _, err = qtx.CreateOutboxEvent(ctx, matchingdata.CreateOutboxEventParams{
+		RideID:  pgtype.UUID{Bytes: rideID, Valid: true},
+		Stream:  matchingdata.StreamRideaccepted,
+		Payload: payload,
+	}); err != nil {
+		return matchingdata.Driver{}, fmt.Errorf("CreateOutboxEvent failed: %v", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return matchingdata.Driver{}, fmt.Errorf("tx commit failed: %v", err)
+	}
+
+	return driver, nil
+}
+
 // Lock to prevent double assignment of a single driver
 // Dedup to prevent same ride from being matched twice
-// ALWAYS release both
-func matchDriver(s matchingServiceServer, rideID uuid.UUID) (matchingdata.Driver, error) {
+func matchDriver(ctx context.Context, s matchingServiceServer, rideID uuid.UUID) (matchingdata.Driver, error) {
 	// Hardcoding max number of drivers to offer requests
 	drivers, err := s.queries.GetNRandomAvailableDrivers(context.Background(), int32(5))
 	if err != nil {
@@ -61,82 +134,21 @@ func matchDriver(s matchingServiceServer, rideID uuid.UUID) (matchingdata.Driver
 		}
 	}
 
-	ctx := context.Background()
 	for _, driver := range drivers {
 		if driver.Status != "available" {
 			continue
 		}
-
-		// We assume driver is given 10s to accept/reject the ride
-		// For simplicity, driver will always accept
-		time.Sleep(3 * time.Second)
-
-		mutex := s.rs.NewMutex(
-			fmt.Sprintf("mutex-driver-%v", driver.ID.String()),
-			redsync.WithExpiry(30*time.Second),
-		)
-		// Try to acquire lock
-		// Note: Always release lock when returning an error
-		err := mutex.Lock()
-		if err != nil {
-			log.Printf("Lock acquistion error: %v", err)
+		matched, err := tryDriver(s, ctx, rideID, driver)
+		if errors.Is(err, errAlreadyMatched) {
+			return matchingdata.Driver{}, errAlreadyMatched
+		}
+		if errors.Is(err, errTryNext) {
 			continue
 		}
-
-		// Transaction: Update driver status and deduplicate
-		tx, err := s.pgxpool.BeginTx(ctx, pgx.TxOptions{})
 		if err != nil {
-			mutex.Unlock()
-			return matchingdata.Driver{}, fmt.Errorf("Could not create db transaction: %v", err)
+			return matchingdata.Driver{}, err
 		}
-		// Note: We rollback when returning an error. Not using defer since this is inside a loop
-		qtx := s.queries.WithTx(tx)
-
-		// Deduplication
-		_, err = qtx.CreateDedupEntry(ctx, matchingdata.CreateDedupEntryParams{
-			RideID: pgtype.UUID{Bytes: rideID, Valid: true},
-			Stream: matchingdata.StreamRiderequested,
-		})
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				// On conflict do nothing
-				tx.Rollback(ctx)
-				mutex.Unlock()
-				log.Printf("ride may have already matched %s, skipping", rideID)
-				break
-			} else {
-				tx.Rollback(ctx)
-				mutex.Unlock()
-				log.Printf("Deduplication table error: %v", err)
-				continue // should I let it retry despite a db error?
-			}
-		}
-
-		// Update driver status to busy
-		err = qtx.UpdateDriverStatus(ctx, matchingdata.UpdateDriverStatusParams{
-			ID:     pgtype.UUID{Bytes: driver.ID.Bytes, Valid: true},
-			Status: matchingdata.DriverstatusBusy,
-		})
-		if err != nil {
-			tx.Rollback(ctx)
-			mutex.Unlock()
-			return matchingdata.Driver{}, fmt.Errorf("UpdateDriverStatus failed: %v", err)
-		}
-
-		// Commit transaction
-		if err := tx.Commit(ctx); err != nil {
-			mutex.Unlock()
-			return matchingdata.Driver{}, fmt.Errorf("tx commit failed: %v", err)
-		}
-
-		// Release Lock
-		ok, err := mutex.Unlock()
-		if !ok || err != nil {
-			log.Fatalf("Lock release error: %v", err)
-		}
-
-		return driver, nil
-		// If no driver found, matching failed. Do something
+		return matched, nil
 	}
 	// Warning: This error message is coupled to retry logic in processRideRequests. Change both or none.
 	return matchingdata.Driver{}, fmt.Errorf("Could not match")
@@ -207,26 +219,20 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			log.Printf("Deduplication table error: %v", err)
+			checkBacklog = true
 			continue
 		}
 
-		// TODO: its fine for this event to not need an outbox pattern as the reconciler handles this?
-
-		// // Publish an update to the Ride Status
-		// xargs := redis.XAddArgs{
-		// 	Stream: "ride.matching",
-		// 	ID:     "*",
-		// 	Values: []string{"rideID", rideID.String()},
-		// }
-		// err = s.messages.XAdd(ctx, &xargs).Err()
-		// if err != nil {
-		// 	log.Printf("updateRideStatus MATCHING failed for ride %s: %v", rideID, err)
-		// }
-
 		// Match driver currently doesn't use rideID but it ideally takes rider location while matching
-		driver, err := matchDriver(s, rideID)
+		driver, err := matchDriver(ctx, s, rideID)
 		if err != nil {
-			if err.Error() == "Could not match" {
+			if errors.Is(err, errAlreadyMatched) {
+				if err := s.messages.XAck(ctx, "ride.requested", consgroup, message.ID).Err(); err != nil {
+					log.Printf("XAck failed for message %s: %v", message.ID, err)
+				}
+				lastID = message.ID
+				continue
+			} else if err.Error() == "Could not match" {
 				// Switch back to backlog mode so the failed message (now in PEL) is retried on the next iteration instead of being skipped by ">".
 				checkBacklog = true
 				continue
@@ -235,19 +241,7 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 			}
 		}
 
-		// Publish an update to the Ride Status
 		log.Printf("Driver %v accepted ride with ID %v", driver, rideID)
-		xargs := redis.XAddArgs{
-			Stream: "ride.accepted",
-			ID:     "*",
-			Values: []string{"rideID", rideID.String(), "driverID", driver.ID.String()},
-		}
-		err = s.messages.XAdd(ctx, &xargs).Err()
-		if err != nil {
-			log.Printf("updateRideStatus ACCEPTED failed for ride %s: %v", rideID, err)
-		}
-
-		// Possible failure scenario
 
 		if err := s.messages.XAck(ctx, "ride.requested", consgroup, message.ID).Err(); err != nil {
 			log.Printf("XAck failed for message %s: %v", message.ID, err)
@@ -255,6 +249,50 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 			log.Printf("[ride.requested] Successfully processed message %s (rideID: %s)", message.ID, rideID)
 		}
 		lastID = message.ID
+	}
+}
+
+func publishOutboxEvents(ctx context.Context, s matchingServiceServer) error {
+	const outboxTimeOut = 30
+	for {
+		event, err := s.queries.ClaimOutboxEvent(ctx, outboxTimeOut)
+		if err == pgx.ErrNoRows {
+			time.Sleep(time.Second)
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("Query GetOutboxRow failed: %v", err)
+		}
+
+		var p struct {
+			DriverID string `json:"driverID"`
+		}
+		if event.Payload == nil {
+			log.Printf("WARNING: No payload where expected")
+			continue
+		}
+		if err := json.Unmarshal(event.Payload, &p); err != nil {
+			log.Printf("failed to unmarshal outbox payload: %v", err)
+			continue
+		}
+
+		xargs := redis.XAddArgs{
+			Stream: string(event.Stream),
+			ID:     "*",
+			Values: []string{
+				"rideID", event.RideID.String(),
+				"driverID", p.DriverID,
+			},
+		}
+		err = s.messages.XAdd(ctx, &xargs).Err()
+		if err != nil {
+			log.Printf("failed to publish ride event: %v", err)
+			continue
+		}
+
+		if err = s.queries.SetOutboxPublished(ctx, event.ID); err != nil {
+			log.Printf("Query SetOutboxPublished failed: %v", err)
+		}
 	}
 }
 
@@ -307,33 +345,47 @@ func main() {
 	healthServer := health.NewServer()
 	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
 
-	// Readiness goroutine that maintains service status by pinging dependencies
-	go func() {
-		time.Sleep(5 * time.Second)
-		err1 := s.pgxpool.Ping(context.Background())
-		err2 := s.messages.Ping(context.Background()).Err()
-		if err1 == nil && err2 == nil {
-			healthServer.SetServingStatus("readiness", grpc_health_v1.HealthCheckResponse_SERVING)
-		} else {
-			healthServer.SetServingStatus("readiness", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
-			log.Printf("readiness check failed: postgres=%v redis=%v", err1, err2)
-		}
-	}()
-
 	g, ctx := errgroup.WithContext(context.Background())
 
+	// Readiness goroutine that maintains service status by pinging dependencies
+	g.Go(func() error {
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(5 * time.Second):
+			}
+			err1 := s.pgxpool.Ping(ctx)
+			err2 := s.messages.Ping(ctx).Err()
+			if err1 == nil && err2 == nil {
+				healthServer.SetServingStatus("readiness", grpc_health_v1.HealthCheckResponse_SERVING)
+			} else {
+				healthServer.SetServingStatus("readiness", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+				log.Printf("readiness check failed: postgres=%v redis=%v", err1, err2)
+			}
+		}
+	})
+
+	// Consume messages
+	g.Go(func() error {
+		const consumer = "matching-1" // TODO don't hard code this
+		log.Printf("Processing Ride Requests...")
+		return processRideRequests(ctx, *s, consumer)
+	})
+
+	// Outbox publisher
+	g.Go(func() error {
+		log.Printf("Publishing New Rides...")
+		return publishOutboxEvents(ctx, *s)
+	})
+
+	// Serving gRPC requests
 	g.Go(func() error {
 		log.Printf("matching-service gRPC listening on port %d", *port)
 		if err := grpcServer.Serve(lis); err != nil {
 			return fmt.Errorf("gRPC serve: %w", err)
 		}
 		return nil
-	})
-
-	g.Go(func() error {
-		const consumer = "matching-1" // TODO don't hard code this
-		log.Printf("Processing Ride Requests...")
-		return processRideRequests(ctx, *s, consumer)
 	})
 
 	if err := g.Wait(); err != nil {

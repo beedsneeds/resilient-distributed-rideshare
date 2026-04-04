@@ -37,14 +37,15 @@ WHERE id = $1;
 -- name: UpdateDriverStatus :exec
 UPDATE driver
 SET status = $2
-WHERE id = $1;
+WHERE id = $1
+    AND status = 'available';
 
 -- name: ResetAllDriversToAvailable :exec
 UPDATE driver
 SET status = 'available';
 
 /* 
-* Deduplication and Outbox
+* Deduplication
 */ 
 -- name: CreateDedupEntry :one
 INSERT INTO deduplication (
@@ -67,12 +68,38 @@ SET processed_at = NOW()
 WHERE ride_id = $1 
     AND stream = $2;
 
+/*
+* Outbox
+*/
+
 -- name: CreateOutboxEvent :one
 INSERT INTO outbox (
-    ride_id, stream
+    ride_id, stream, payload
 ) VALUES (
-    $1, $2
+    $1, $2, $3
 ) RETURNING *;
+
+-- name: ClaimOutboxEvent :one
+UPDATE outbox
+SET retrieved_at = NOW()
+WHERE id = (
+    SELECT id
+    FROM outbox
+    WHERE published_at IS NULL
+    AND (
+      retrieved_at IS NULL  -- fresh rows
+      OR retrieved_at < NOW() - INTERVAL '1 second' * $1 -- stale / timed out rows
+    )
+    ORDER BY created_at ASC
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1
+)
+RETURNING *;
+
+-- name: SetOutboxPublished :exec
+UPDATE outbox 
+SET published_at = NOW()
+WHERE id = $1;
 
 /* 
     reconciler Queries

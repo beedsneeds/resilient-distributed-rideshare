@@ -11,6 +11,29 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const checkDedupEntry = `-- name: CheckDedupEntry :one
+SELECT id, ride_id, stream, processed_at FROM deduplication
+WHERE ride_id = $1
+  AND stream = $2
+`
+
+type CheckDedupEntryParams struct {
+	RideID pgtype.UUID
+	Stream Stream
+}
+
+func (q *Queries) CheckDedupEntry(ctx context.Context, arg CheckDedupEntryParams) (Deduplication, error) {
+	row := q.db.QueryRow(ctx, checkDedupEntry, arg.RideID, arg.Stream)
+	var i Deduplication
+	err := row.Scan(
+		&i.ID,
+		&i.RideID,
+		&i.Stream,
+		&i.ProcessedAt,
+	)
+	return i, err
+}
+
 const claimOutboxEvent = `-- name: ClaimOutboxEvent :one
 UPDATE outbox
 SET retrieved_at = NOW()
@@ -43,9 +66,40 @@ func (q *Queries) ClaimOutboxEvent(ctx context.Context, dollar_1 interface{}) (O
 	return i, err
 }
 
+const createDedupEntry = `-- name: CreateDedupEntry :one
+/* 
+* Deduplication
+*/ 
+INSERT INTO deduplication (
+    ride_id, stream
+) VALUES (
+    $1, $2
+) ON CONFLICT (
+    ride_id, stream
+) DO NOTHING
+RETURNING id, ride_id, stream, processed_at
+`
+
+type CreateDedupEntryParams struct {
+	RideID pgtype.UUID
+	Stream Stream
+}
+
+func (q *Queries) CreateDedupEntry(ctx context.Context, arg CreateDedupEntryParams) (Deduplication, error) {
+	row := q.db.QueryRow(ctx, createDedupEntry, arg.RideID, arg.Stream)
+	var i Deduplication
+	err := row.Scan(
+		&i.ID,
+		&i.RideID,
+		&i.Stream,
+		&i.ProcessedAt,
+	)
+	return i, err
+}
+
 const createOutboxEvent = `-- name: CreateOutboxEvent :one
 /* 
-* Deduplication and Outbox
+* Outbox
 */ 
 INSERT INTO outbox (
   ride_id, stream
@@ -208,25 +262,33 @@ func (q *Queries) ListStaleRides(ctx context.Context, arg ListStaleRidesParams) 
 	return items, nil
 }
 
-const setOutboxPublished = `-- name: SetOutboxPublished :one
+const setDedupProcessed = `-- name: SetDedupProcessed :exec
+UPDATE deduplication 
+SET processed_at = NOW()
+WHERE ride_id = $1 
+    AND stream = $2
+`
+
+type SetDedupProcessedParams struct {
+	RideID pgtype.UUID
+	Stream Stream
+}
+
+func (q *Queries) SetDedupProcessed(ctx context.Context, arg SetDedupProcessedParams) error {
+	_, err := q.db.Exec(ctx, setDedupProcessed, arg.RideID, arg.Stream)
+	return err
+}
+
+const setOutboxPublished = `-- name: SetOutboxPublished :exec
 UPDATE outbox 
 SET published_at = NOW()
 WHERE id = $1
 RETURNING id, ride_id, stream, created_at, retrieved_at, published_at
 `
 
-func (q *Queries) SetOutboxPublished(ctx context.Context, id pgtype.UUID) (Outbox, error) {
-	row := q.db.QueryRow(ctx, setOutboxPublished, id)
-	var i Outbox
-	err := row.Scan(
-		&i.ID,
-		&i.RideID,
-		&i.Stream,
-		&i.CreatedAt,
-		&i.RetrievedAt,
-		&i.PublishedAt,
-	)
-	return i, err
+func (q *Queries) SetOutboxPublished(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, setOutboxPublished, id)
+	return err
 }
 
 const setRideAccepted = `-- name: SetRideAccepted :one
@@ -245,36 +307,17 @@ type SetRideAcceptedParams struct {
 	DriverID pgtype.UUID
 }
 
-// TODO: check if 1) ride exists 2) the correct enum is being inserted
+// -- name: UpdateRideStatus :one
+// UPDATE ride
+// SET ride_status = $2
+// WHERE id = $1
+//
+//	AND $2::ridestatus IN ('completed', 'cancelled', 'failed', 'in_progress')
+//
+// RETURNING *;
+// -- TODO: check if 1) ride exists 2) the correct enum is being inserted
 func (q *Queries) SetRideAccepted(ctx context.Context, arg SetRideAcceptedParams) (Ride, error) {
 	row := q.db.QueryRow(ctx, setRideAccepted, arg.ID, arg.DriverID)
-	var i Ride
-	err := row.Scan(
-		&i.ID,
-		&i.RiderID,
-		&i.DriverID,
-		&i.RideStatus,
-		&i.RequestedAt,
-		&i.AcceptedAt,
-	)
-	return i, err
-}
-
-const updateRideStatus = `-- name: UpdateRideStatus :one
-UPDATE ride
-SET ride_status = $2
-WHERE id = $1 
-    AND $2::ridestatus IN ('completed', 'cancelled', 'failed', 'in_progress')
-RETURNING id, rider_id, driver_id, ride_status, requested_at, accepted_at
-`
-
-type UpdateRideStatusParams struct {
-	ID         pgtype.UUID
-	RideStatus Ridestatus
-}
-
-func (q *Queries) UpdateRideStatus(ctx context.Context, arg UpdateRideStatusParams) (Ride, error) {
-	row := q.db.QueryRow(ctx, updateRideStatus, arg.ID, arg.RideStatus)
 	var i Ride
 	err := row.Scan(
 		&i.ID,
