@@ -67,6 +67,12 @@ SET processed_at = NOW()
 WHERE ride_id = $1 
     AND stream = $2;
 
+-- name: CreateOutboxEvent :one
+INSERT INTO outbox (
+    ride_id, stream
+) VALUES (
+    $1, $2
+) RETURNING *;
 
 /* 
     reconciler Queries

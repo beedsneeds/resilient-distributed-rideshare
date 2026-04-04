@@ -81,6 +81,33 @@ func (q *Queries) CreateDriver(ctx context.Context, name string) (Driver, error)
 	return i, err
 }
 
+const createOutboxEvent = `-- name: CreateOutboxEvent :one
+INSERT INTO outbox (
+    ride_id, stream
+) VALUES (
+    $1, $2
+) RETURNING id, ride_id, stream, created_at, retrieved_at, published_at
+`
+
+type CreateOutboxEventParams struct {
+	RideID pgtype.UUID
+	Stream NullStream
+}
+
+func (q *Queries) CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventParams) (Outbox, error) {
+	row := q.db.QueryRow(ctx, createOutboxEvent, arg.RideID, arg.Stream)
+	var i Outbox
+	err := row.Scan(
+		&i.ID,
+		&i.RideID,
+		&i.Stream,
+		&i.CreatedAt,
+		&i.RetrievedAt,
+		&i.PublishedAt,
+	)
+	return i, err
+}
+
 const deleteDriver = `-- name: DeleteDriver :exec
 DELETE FROM driver
 WHERE id = $1

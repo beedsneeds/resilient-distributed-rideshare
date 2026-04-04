@@ -58,7 +58,6 @@ type Stream string
 
 const (
 	StreamRiderequested Stream = "ride.requested"
-	StreamRidematching  Stream = "ride.matching"
 	StreamRideaccepted  Stream = "ride.accepted"
 )
 
@@ -108,4 +107,13 @@ type Driver struct {
 	ID     pgtype.UUID
 	Name   string
 	Status Driverstatus
+}
+
+type Outbox struct {
+	ID          pgtype.UUID
+	RideID      pgtype.UUID
+	Stream      NullStream
+	CreatedAt   pgtype.Timestamp
+	RetrievedAt pgtype.Timestamp
+	PublishedAt pgtype.Timestamp
 }

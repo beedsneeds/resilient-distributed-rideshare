@@ -18,36 +18,13 @@ INSERT INTO ride (
 )
 RETURNING *;
 
--- name: UpdateRideStatus :one
-UPDATE ride
-SET ride_status = $2
-WHERE id = $1 
-    AND $2::ridestatus IN ('completed', 'cancelled', 'failed', 'in_progress')
-RETURNING *;
--- TODO: check if 1) ride exists 2) the correct enum is being inserted
-
-/* 
-* Don't condense into a single update to protect valid state transitions 
-*/
--- name: SetRideMatching :one
-UPDATE ride
-SET ride_status = 'matching',
-    matching_at = NOW()
-WHERE id = $1
-    AND ride_status = 'requested'
-RETURNING *;
-
-/*
-* We aren't using this because we assume the human element in the transition of matched -> accepted 
-* does not exist and that it will always succeed. Will extend functionality later (maybe)
-*/
--- name: SetRideMatched :one
-UPDATE ride
-SET ride_status = 'matched',
-    matched_at = NOW()
-WHERE id = $1
-    AND ride_status = 'matching'
-RETURNING *;
+-- -- name: UpdateRideStatus :one
+-- UPDATE ride
+-- SET ride_status = $2
+-- WHERE id = $1 
+--     AND $2::ridestatus IN ('completed', 'cancelled', 'failed', 'in_progress')
+-- RETURNING *;
+-- -- TODO: check if 1) ride exists 2) the correct enum is being inserted
 
 -- name: SetRideAccepted :one
 UPDATE ride
@@ -55,9 +32,8 @@ SET driver_id = $2,
     ride_status = 'accepted',
     accepted_at = NOW()
 WHERE id = $1
-    AND ride_status = 'matching'
+    AND ride_status = 'requested'
 RETURNING *;
-
 
 -- name: DeleteRide :exec
 DELETE FROM ride
@@ -131,8 +107,25 @@ WHERE ride_status = $1
 
 
 
+/*
+* We aren't using this because we assume the human element in the transition of matched -> accepted 
+* does not exist and that it will always succeed. Will extend functionality later (maybe)
+* The transition on requested -> matching also is redundant (see obsidian)
+-- name: SetRideMatched :one
+UPDATE ride
+SET ride_status = 'matched',
+    matched_at = NOW()
+WHERE id = $1
+    AND ride_status = 'matching'
+RETURNING *;
 
-
-
+-- name: SetRideMatching :one
+UPDATE ride
+SET ride_status = 'matching',
+    matching_at = NOW()
+WHERE id = $1
+    AND ride_status = 'requested'
+RETURNING *;
+*/
 
 

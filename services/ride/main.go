@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -30,26 +31,26 @@ var (
 
 type rideServiceServer struct {
 	ridepb.UnimplementedRideServiceServer
-	pgconn   *pgx.Conn
+	pool     *pgxpool.Pool
 	queries  *ridedata.Queries
 	messages *redis.Client
 }
 
 func (s *rideServiceServer) Close() {
-	s.pgconn.Close(context.Background())
+	s.pool.Close()
 	s.messages.Close()
 }
 
 var rideStatusToProto = map[ridedata.Ridestatus]ridepb.RideStatus{
 	ridedata.RidestatusUnspecified: ridepb.RideStatus_RIDE_STATUS_UNSPECIFIED,
 	ridedata.RidestatusRequested:   ridepb.RideStatus_RIDE_STATUS_REQUESTED,
-	ridedata.RidestatusMatching:    ridepb.RideStatus_RIDE_STATUS_MATCHING,
-	ridedata.RidestatusMatched:     ridepb.RideStatus_RIDE_STATUS_MATCHED,
-	ridedata.RidestatusAccepted:    ridepb.RideStatus_RIDE_STATUS_ACCEPTED,
-	ridedata.RidestatusInProgress:  ridepb.RideStatus_RIDE_STATUS_IN_PROGRESS,
-	ridedata.RidestatusCompleted:   ridepb.RideStatus_RIDE_STATUS_COMPLETED,
-	ridedata.RidestatusCancelled:   ridepb.RideStatus_RIDE_STATUS_CANCELLED,
-	ridedata.RidestatusFailed:      ridepb.RideStatus_RIDE_STATUS_FAILED,
+	// ridedata.RidestatusMatching:    ridepb.RideStatus_RIDE_STATUS_MATCHING,
+	// ridedata.RidestatusMatched:     ridepb.RideStatus_RIDE_STATUS_MATCHED,
+	ridedata.RidestatusAccepted: ridepb.RideStatus_RIDE_STATUS_ACCEPTED,
+	// ridedata.RidestatusInProgress:  ridepb.RideStatus_RIDE_STATUS_IN_PROGRESS,
+	// ridedata.RidestatusCompleted:   ridepb.RideStatus_RIDE_STATUS_COMPLETED,
+	// ridedata.RidestatusCancelled:   ridepb.RideStatus_RIDE_STATUS_CANCELLED,
+	// ridedata.RidestatusFailed:      ridepb.RideStatus_RIDE_STATUS_FAILED,
 }
 
 func pgRidetoProtoRide(r ridedata.Ride) *ridepb.Ride {
@@ -85,12 +86,14 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 	}
 
 	// Atomically publish to outbox table while creating ride
-	tx, err := s.pgconn.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Could not create db transaction: %v", err)
 	}
 	defer tx.Rollback(ctx)
+
 	qtx := s.queries.WithTx(tx)
+
 	newRide, err := qtx.CreateRide(ctx, ridedata.CreateRideParams{
 		ID:      pgtype.UUID{Bytes: newRideID, Valid: true},
 		RiderID: pgtype.UUID{Bytes: riderID, Valid: true},
@@ -98,6 +101,7 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "CreateRide failed: %v", err)
 	}
+
 	_, err = qtx.CreateOutboxEvent(ctx, ridedata.CreateOutboxEventParams{
 		RideID: pgtype.UUID{Bytes: newRideID, Valid: true},
 		Stream: ridedata.StreamRiderequested,
@@ -105,28 +109,17 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "CreateOutboxEvent failed: %v", err)
 	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, status.Errorf(codes.Internal, "commit failed: %v", err)
 	}
-
-	// What if service dies here?
-
-	// xargs := redis.XAddArgs{
-	// 	Stream: "ride.requested",
-	// 	ID:     "*",
-	// 	Values: []string{"rideID", newRideID.String()},
-	// }
-	// err = s.messages.XAdd(ctx, &xargs).Err()
-	// if err != nil {
-	// 	return nil, status.Errorf(codes.Internal, "failed to publish ride event: %v", err)
-	// }
 
 	return &ridepb.RequestRideResponse{
 		Ride: pgRidetoProtoRide(newRide),
 	}, nil
 }
 
-func publishOutbox(ctx context.Context, s rideServiceServer) error {
+func publishOutboxEvents(ctx context.Context, s rideServiceServer) error {
 	const outboxTimeOut = 30
 	// // This is reused in reconciler/main.go
 	for {
@@ -158,8 +151,8 @@ func publishOutbox(ctx context.Context, s rideServiceServer) error {
 
 func newServer() (*rideServiceServer, error) {
 	databaseURL := "postgres://postgres:postgres@ride-db:5432/ride_db"
-	pgconn, err := pgx.Connect(context.Background(), databaseURL)
-	// pgconn, err := pgx.Connect(context.Background(), os.Getenv("DATABASE_URL"))
+	pool, err := pgxpool.New(context.Background(), databaseURL)
+	// pool, err := pgxpool.New(context.Background(), os.Getenv("DATABASE_URL"))
 	if err != nil {
 		return nil, fmt.Errorf("unable to connect to database: %w", err)
 	}
@@ -169,7 +162,7 @@ func newServer() (*rideServiceServer, error) {
 		DB:       0,
 	})
 
-	return &rideServiceServer{pgconn: pgconn, queries: ridedata.New(pgconn), messages: rdsconn}, nil
+	return &rideServiceServer{pool: pool, queries: ridedata.New(pool), messages: rdsconn}, nil
 }
 
 func main() {
@@ -197,14 +190,14 @@ func main() {
 	// Readyness ("readiness") starts as NOT_SERVING. The goroutine handles it fully
 	g.Go(func() error {
 		for {
-			// Using select because the infinite loop did not have a return path
+			// Using select because the for-while loop did not have a return path
 			select {
 			case <-ctx.Done():
 				// Exits when another goroutine fails
 				return nil
 			case <-time.After(5 * time.Second):
 			}
-			err1 := rideServer.pgconn.Ping(ctx)
+			err1 := rideServer.pool.Ping(ctx)
 			err2 := rideServer.messages.Ping(ctx).Err()
 			if err1 == nil && err2 == nil {
 				healthServer.SetServingStatus("readiness", grpc_health_v1.HealthCheckResponse_SERVING)
@@ -216,11 +209,11 @@ func main() {
 	})
 
 	// Consume messages
-	g.Go(func() error {
-		const consumer = "ride-1" // TODO don't hard code this
-		log.Printf("Processing Ride Matching Status Updates...")
-		return processRideMatchingStatus(ctx, *rideServer, consumer)
-	})
+	// g.Go(func() error {
+	// 	const consumer = "ride-1" // TODO don't hard code this
+	// 	log.Printf("Processing Ride Matching Status Updates...")
+	// 	return processRideMatchingStatus(ctx, *rideServer, consumer)
+	// })
 	g.Go(func() error {
 		const consumer = "ride-1" // TODO don't hard code this
 		log.Printf("Processing Ride Accepted Status Updates...")
@@ -229,7 +222,7 @@ func main() {
 	// Outbox publisher
 	g.Go(func() error {
 		log.Printf("Publishing New Rides...")
-		return publishOutbox(ctx, *rideServer)
+		return publishOutboxEvents(ctx, *rideServer)
 	})
 
 	g.Go(func() error {

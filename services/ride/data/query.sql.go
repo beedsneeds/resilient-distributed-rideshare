@@ -80,7 +80,7 @@ INSERT INTO ride (
 ) VALUES (
   $1, $2
 )
-RETURNING id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at
+RETURNING id, rider_id, driver_id, ride_status, requested_at, accepted_at
 `
 
 type CreateRideParams struct {
@@ -97,8 +97,6 @@ func (q *Queries) CreateRide(ctx context.Context, arg CreateRideParams) (Ride, e
 		&i.DriverID,
 		&i.RideStatus,
 		&i.RequestedAt,
-		&i.MatchingAt,
-		&i.MatchedAt,
 		&i.AcceptedAt,
 	)
 	return i, err
@@ -119,7 +117,7 @@ const getRide = `-- name: GetRide :one
 * Ride
 */ 
 
-SELECT id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at FROM ride
+SELECT id, rider_id, driver_id, ride_status, requested_at, accepted_at FROM ride
 WHERE id = $1 LIMIT 1
 `
 
@@ -132,15 +130,13 @@ func (q *Queries) GetRide(ctx context.Context, id pgtype.UUID) (Ride, error) {
 		&i.DriverID,
 		&i.RideStatus,
 		&i.RequestedAt,
-		&i.MatchingAt,
-		&i.MatchedAt,
 		&i.AcceptedAt,
 	)
 	return i, err
 }
 
 const listRides = `-- name: ListRides :many
-SELECT id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at FROM ride
+SELECT id, rider_id, driver_id, ride_status, requested_at, accepted_at FROM ride
 ORDER BY requested_at
 `
 
@@ -159,8 +155,6 @@ func (q *Queries) ListRides(ctx context.Context) ([]Ride, error) {
 			&i.DriverID,
 			&i.RideStatus,
 			&i.RequestedAt,
-			&i.MatchingAt,
-			&i.MatchedAt,
 			&i.AcceptedAt,
 		); err != nil {
 			return nil, err
@@ -177,7 +171,7 @@ const listStaleRides = `-- name: ListStaleRides :many
 /* 
     reconciler Queries
 */
-SELECT id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at FROM ride
+SELECT id, rider_id, driver_id, ride_status, requested_at, accepted_at FROM ride
 WHERE ride_status = $1
   AND requested_at < NOW() - INTERVAL '1 second' * $2
 `
@@ -202,8 +196,6 @@ func (q *Queries) ListStaleRides(ctx context.Context, arg ListStaleRidesParams) 
 			&i.DriverID,
 			&i.RideStatus,
 			&i.RequestedAt,
-			&i.MatchingAt,
-			&i.MatchedAt,
 			&i.AcceptedAt,
 		); err != nil {
 			return nil, err
@@ -238,13 +230,14 @@ func (q *Queries) SetOutboxPublished(ctx context.Context, id pgtype.UUID) (Outbo
 }
 
 const setRideAccepted = `-- name: SetRideAccepted :one
+
 UPDATE ride
 SET driver_id = $2,
     ride_status = 'accepted',
     accepted_at = NOW()
 WHERE id = $1
-    AND ride_status = 'matching'
-RETURNING id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at
+    AND ride_status = 'requested'
+RETURNING id, rider_id, driver_id, ride_status, requested_at, accepted_at
 `
 
 type SetRideAcceptedParams struct {
@@ -252,6 +245,7 @@ type SetRideAcceptedParams struct {
 	DriverID pgtype.UUID
 }
 
+// TODO: check if 1) ride exists 2) the correct enum is being inserted
 func (q *Queries) SetRideAccepted(ctx context.Context, arg SetRideAcceptedParams) (Ride, error) {
 	row := q.db.QueryRow(ctx, setRideAccepted, arg.ID, arg.DriverID)
 	var i Ride
@@ -261,67 +255,6 @@ func (q *Queries) SetRideAccepted(ctx context.Context, arg SetRideAcceptedParams
 		&i.DriverID,
 		&i.RideStatus,
 		&i.RequestedAt,
-		&i.MatchingAt,
-		&i.MatchedAt,
-		&i.AcceptedAt,
-	)
-	return i, err
-}
-
-const setRideMatched = `-- name: SetRideMatched :one
-/*
-* We aren't using this because we assume the human element in the transition of matched -> accepted 
-* does not exist and that it will always succeed. Will extend functionality later (maybe)
-*/
-UPDATE ride
-SET ride_status = 'matched',
-    matched_at = NOW()
-WHERE id = $1
-    AND ride_status = 'matching'
-RETURNING id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at
-`
-
-func (q *Queries) SetRideMatched(ctx context.Context, id pgtype.UUID) (Ride, error) {
-	row := q.db.QueryRow(ctx, setRideMatched, id)
-	var i Ride
-	err := row.Scan(
-		&i.ID,
-		&i.RiderID,
-		&i.DriverID,
-		&i.RideStatus,
-		&i.RequestedAt,
-		&i.MatchingAt,
-		&i.MatchedAt,
-		&i.AcceptedAt,
-	)
-	return i, err
-}
-
-const setRideMatching = `-- name: SetRideMatching :one
-
-/* 
-* Don't condense into a single update to protect valid state transitions 
-*/
-UPDATE ride
-SET ride_status = 'matching',
-    matching_at = NOW()
-WHERE id = $1
-    AND ride_status = 'requested'
-RETURNING id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at
-`
-
-// TODO: check if 1) ride exists 2) the correct enum is being inserted
-func (q *Queries) SetRideMatching(ctx context.Context, id pgtype.UUID) (Ride, error) {
-	row := q.db.QueryRow(ctx, setRideMatching, id)
-	var i Ride
-	err := row.Scan(
-		&i.ID,
-		&i.RiderID,
-		&i.DriverID,
-		&i.RideStatus,
-		&i.RequestedAt,
-		&i.MatchingAt,
-		&i.MatchedAt,
 		&i.AcceptedAt,
 	)
 	return i, err
@@ -332,7 +265,7 @@ UPDATE ride
 SET ride_status = $2
 WHERE id = $1 
     AND $2::ridestatus IN ('completed', 'cancelled', 'failed', 'in_progress')
-RETURNING id, rider_id, driver_id, ride_status, requested_at, matching_at, matched_at, accepted_at
+RETURNING id, rider_id, driver_id, ride_status, requested_at, accepted_at
 `
 
 type UpdateRideStatusParams struct {
@@ -349,8 +282,6 @@ func (q *Queries) UpdateRideStatus(ctx context.Context, arg UpdateRideStatusPara
 		&i.DriverID,
 		&i.RideStatus,
 		&i.RequestedAt,
-		&i.MatchingAt,
-		&i.MatchedAt,
 		&i.AcceptedAt,
 	)
 	return i, err

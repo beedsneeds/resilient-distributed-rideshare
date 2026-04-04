@@ -24,8 +24,4 @@ go.work.sum
 # env file
 .env
 
-# all trial codebases: 
-/services/grpc-go
-/hello
-
 /.claude

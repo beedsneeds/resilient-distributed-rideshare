@@ -1,17 +1,18 @@
 CREATE TYPE ridestatus AS ENUM (
     'unspecified',
     'requested',
-    'matching',
-    'matched',
-    'accepted',
-    'in_progress',
-    'completed',
-    'cancelled',
-    'failed'
+    -- 'matching',
+    -- 'matched',
+    'accepted'
+    -- 'in_progress',
+    -- 'completed',
+    -- 'cancelled',
+    -- 'failed'
 );
 
 CREATE TYPE stream AS ENUM (
-    'ride.requested'
+    'ride.requested',
+    'ride.accepted'
 );
 
 
@@ -24,8 +25,6 @@ CREATE TABLE ride(
     ride_status ridestatus  NOT NULL    DEFAULT 'requested',
 
     requested_at    TIMESTAMP   DEFAULT NOW(),
-    matching_at     TIMESTAMP,
-    matched_at      TIMESTAMP,
     accepted_at     TIMESTAMP
 );
 

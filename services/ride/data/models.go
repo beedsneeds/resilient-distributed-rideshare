@@ -16,13 +16,7 @@ type Ridestatus string
 const (
 	RidestatusUnspecified Ridestatus = "unspecified"
 	RidestatusRequested   Ridestatus = "requested"
-	RidestatusMatching    Ridestatus = "matching"
-	RidestatusMatched     Ridestatus = "matched"
 	RidestatusAccepted    Ridestatus = "accepted"
-	RidestatusInProgress  Ridestatus = "in_progress"
-	RidestatusCompleted   Ridestatus = "completed"
-	RidestatusCancelled   Ridestatus = "cancelled"
-	RidestatusFailed      Ridestatus = "failed"
 )
 
 func (e *Ridestatus) Scan(src interface{}) error {
@@ -64,6 +58,7 @@ type Stream string
 
 const (
 	StreamRiderequested Stream = "ride.requested"
+	StreamRideaccepted  Stream = "ride.accepted"
 )
 
 func (e *Stream) Scan(src interface{}) error {
@@ -116,7 +111,5 @@ type Ride struct {
 	DriverID    pgtype.UUID
 	RideStatus  Ridestatus
 	RequestedAt pgtype.Timestamp
-	MatchingAt  pgtype.Timestamp
-	MatchedAt   pgtype.Timestamp
 	AcceptedAt  pgtype.Timestamp
 }

@@ -67,11 +67,16 @@ func matchDriver(s matchingServiceServer, rideID uuid.UUID) (matchingdata.Driver
 			continue
 		}
 
+		// We assume driver is given 10s to accept/reject the ride
+		// For simplicity, driver will always accept
+		time.Sleep(3 * time.Second)
+
 		mutex := s.rs.NewMutex(
 			fmt.Sprintf("mutex-driver-%v", driver.ID.String()),
 			redsync.WithExpiry(30*time.Second),
 		)
 		// Try to acquire lock
+		// Note: Always release lock when returning an error
 		err := mutex.Lock()
 		if err != nil {
 			log.Printf("Lock acquistion error: %v", err)
@@ -81,12 +86,10 @@ func matchDriver(s matchingServiceServer, rideID uuid.UUID) (matchingdata.Driver
 		// Transaction: Update driver status and deduplicate
 		tx, err := s.pgxpool.BeginTx(ctx, pgx.TxOptions{})
 		if err != nil {
-			// should I pass on an error or log it?
 			mutex.Unlock()
 			return matchingdata.Driver{}, fmt.Errorf("Could not create db transaction: %v", err)
 		}
-		// defer tx.Rollback(ctx)
-		// Not using defer since its a loop. Instead we rollback on every error
+		// Note: We rollback when returning an error. Not using defer since this is inside a loop
 		qtx := s.queries.WithTx(tx)
 
 		// Deduplication
@@ -96,6 +99,7 @@ func matchDriver(s matchingServiceServer, rideID uuid.UUID) (matchingdata.Driver
 		})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
+				// On conflict do nothing
 				tx.Rollback(ctx)
 				mutex.Unlock()
 				log.Printf("ride may have already matched %s, skipping", rideID)
@@ -124,10 +128,6 @@ func matchDriver(s matchingServiceServer, rideID uuid.UUID) (matchingdata.Driver
 			mutex.Unlock()
 			return matchingdata.Driver{}, fmt.Errorf("tx commit failed: %v", err)
 		}
-
-		// We assume driver is given 10s to accept/reject the ride
-		// For simplicity, driver will always accept
-		time.Sleep(3 * time.Second)
 
 		// Release Lock
 		ok, err := mutex.Unlock()
@@ -191,14 +191,14 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 			log.Printf("invalid rideID UUID %s: %v", rideID, err)
 			continue
 		}
-		// Deduplicate messages
+		// Deduplicate messages once cheaply before matchDriver does, so we don't have to acquire locks and open transactions
+		// This is just an optimization, not a dedup guarantee
 		_, err = s.queries.CheckDedupEntry(ctx, matchingdata.CheckDedupEntryParams{
 			RideID: pgtype.UUID{Bytes: rideID, Valid: true},
 			Stream: matchingdata.StreamRiderequested,
 		})
 		if err == nil {
-			// Ack and skip this message since duplicate entry found
-			// If there was no duplicate entry (i.e. fresh entry), we'd get a pgx.ErrNoRows
+			// Ack and skip this message since duplicate entry found. Fresh entries get a pgx.ErrNoRows
 			log.Printf("duplicate ride %s, skipping", rideID)
 			if err := s.messages.XAck(ctx, "ride.requested", consgroup, message.ID).Err(); err != nil {
 				log.Printf("XAck failed for message %s: %v", message.ID, err)
@@ -212,16 +212,16 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 
 		// TODO: its fine for this event to not need an outbox pattern as the reconciler handles this?
 
-		// Publish an update to the Ride Status
-		xargs := redis.XAddArgs{
-			Stream: "ride.matching",
-			ID:     "*",
-			Values: []string{"rideID", rideID.String()},
-		}
-		err = s.messages.XAdd(ctx, &xargs).Err()
-		if err != nil {
-			log.Printf("updateRideStatus MATCHING failed for ride %s: %v", rideID, err)
-		}
+		// // Publish an update to the Ride Status
+		// xargs := redis.XAddArgs{
+		// 	Stream: "ride.matching",
+		// 	ID:     "*",
+		// 	Values: []string{"rideID", rideID.String()},
+		// }
+		// err = s.messages.XAdd(ctx, &xargs).Err()
+		// if err != nil {
+		// 	log.Printf("updateRideStatus MATCHING failed for ride %s: %v", rideID, err)
+		// }
 
 		// Match driver currently doesn't use rideID but it ideally takes rider location while matching
 		driver, err := matchDriver(s, rideID)
@@ -237,7 +237,7 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 
 		// Publish an update to the Ride Status
 		log.Printf("Driver %v accepted ride with ID %v", driver, rideID)
-		xargs = redis.XAddArgs{
+		xargs := redis.XAddArgs{
 			Stream: "ride.accepted",
 			ID:     "*",
 			Values: []string{"rideID", rideID.String(), "driverID", driver.ID.String()},

@@ -6,7 +6,6 @@ CREATE TYPE driverstatus AS ENUM(
 
 CREATE TYPE stream AS ENUM (
     'ride.requested',
-    'ride.matching',
     'ride.accepted'
 );
 
@@ -25,8 +24,11 @@ CREATE TABLE deduplication (
     UNIQUE (ride_id, stream) -- composite key that identifies a unique ride having only one unique operation
 );
 
--- CREATE TABLE outbox (
---     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
---     ride_id         UUID NOT NULL,
-
--- )
+CREATE TABLE outbox (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ride_id         UUID NOT NULL,
+    stream          stream,
+    created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+    retrieved_at    TIMESTAMP,
+    published_at    TIMESTAMP
+)

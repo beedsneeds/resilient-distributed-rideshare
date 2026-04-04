@@ -17,23 +17,6 @@ type StreamHandler interface {
 }
 
 // Implements Handle
-type RideMatchingHandler struct {
-	queries *ridedata.Queries
-}
-
-func (h *RideMatchingHandler) Handle(ctx context.Context, msg redis.XMessage) error {
-	rideID, err := uuid.Parse(msg.Values["rideID"].(string))
-	if err != nil {
-		return fmt.Errorf("invalid rideID: %v", err)
-	}
-	ride, err := h.queries.SetRideMatching(ctx, pgtype.UUID{Bytes: rideID, Valid: true})
-	if err != nil {
-		return fmt.Errorf("SetRideMatching failed: %v", err)
-	}
-	log.Printf("message ID: %s rideID: %s matched for rider %s", msg.ID, rideID, ride.RiderID)
-	return nil
-}
-
 type RideAcceptedHandler struct {
 	queries *ridedata.Queries
 }
@@ -55,6 +38,10 @@ func (h *RideAcceptedHandler) Handle(ctx context.Context, msg redis.XMessage) er
 	}
 	log.Printf("message ID: %s rideID: %s accepted driver %s", msg.ID, rideID, ride.DriverID)
 	return nil
+}
+
+func processRideAcceptedStatus(ctx context.Context, s rideServiceServer, consumer string) error {
+	return processStream(ctx, s, "ride.accepted", "ride-group", consumer, &RideAcceptedHandler{queries: s.queries})
 }
 
 // Polymorphism but with the same flow as matching/main
@@ -116,9 +103,23 @@ func processStream(ctx context.Context, s rideServiceServer, stream, consgroup, 
 	}
 }
 
-func processRideMatchingStatus(ctx context.Context, s rideServiceServer, consumer string) error {
-	return processStream(ctx, s, "ride.matching", "ride-group", consumer, &RideMatchingHandler{queries: s.queries})
-}
-func processRideAcceptedStatus(ctx context.Context, s rideServiceServer, consumer string) error {
-	return processStream(ctx, s, "ride.accepted", "ride-group", consumer, &RideAcceptedHandler{queries: s.queries})
-}
+// type RideMatchingHandler struct {
+// 	queries *ridedata.Queries
+// }
+
+// func (h *RideMatchingHandler) Handle(ctx context.Context, msg redis.XMessage) error {
+// 	rideID, err := uuid.Parse(msg.Values["rideID"].(string))
+// 	if err != nil {
+// 		return fmt.Errorf("invalid rideID: %v", err)
+// 	}
+// 	ride, err := h.queries.SetRideMatching(ctx, pgtype.UUID{Bytes: rideID, Valid: true})
+// 	if err != nil {
+// 		return fmt.Errorf("SetRideMatching failed: %v", err)
+// 	}
+// 	log.Printf("message ID: %s rideID: %s matched for rider %s", msg.ID, rideID, ride.RiderID)
+// 	return nil
+// }
+
+// func processRideMatchingStatus(ctx context.Context, s rideServiceServer, consumer string) error {
+// 	return processStream(ctx, s, "ride.matching", "ride-group", consumer, &RideMatchingHandler{queries: s.queries})
+// }

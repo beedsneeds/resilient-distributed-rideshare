@@ -28,13 +28,9 @@ type RideStatus int32
 const (
 	RideStatus_RIDE_STATUS_UNSPECIFIED RideStatus = 0
 	RideStatus_RIDE_STATUS_REQUESTED   RideStatus = 1 // Rider requested and is awaiting matching
-	RideStatus_RIDE_STATUS_MATCHING    RideStatus = 2 // Requested-Matching are split to account for failures
-	RideStatus_RIDE_STATUS_MATCHED     RideStatus = 3 // Driver matched, awaiting acceptance (10s TTL)
-	RideStatus_RIDE_STATUS_ACCEPTED    RideStatus = 4 // Driver accepted. Implicit: en route to pickup, so stream driver location
-	RideStatus_RIDE_STATUS_IN_PROGRESS RideStatus = 5 // Rider picked up
-	RideStatus_RIDE_STATUS_COMPLETED   RideStatus = 6
-	RideStatus_RIDE_STATUS_CANCELLED   RideStatus = 7
-	RideStatus_RIDE_STATUS_FAILED      RideStatus = 8
+	// RIDE_STATUS_MATCHING = 2; // Requested-Matching are split to account for failures
+	// RIDE_STATUS_MATCHED = 3; // Driver matched, awaiting acceptance (10s TTL)
+	RideStatus_RIDE_STATUS_ACCEPTED RideStatus = 4 // Driver accepted. Implicit: en route to pickup, so stream driver location
 )
 
 // Enum value maps for RideStatus.
@@ -42,24 +38,12 @@ var (
 	RideStatus_name = map[int32]string{
 		0: "RIDE_STATUS_UNSPECIFIED",
 		1: "RIDE_STATUS_REQUESTED",
-		2: "RIDE_STATUS_MATCHING",
-		3: "RIDE_STATUS_MATCHED",
 		4: "RIDE_STATUS_ACCEPTED",
-		5: "RIDE_STATUS_IN_PROGRESS",
-		6: "RIDE_STATUS_COMPLETED",
-		7: "RIDE_STATUS_CANCELLED",
-		8: "RIDE_STATUS_FAILED",
 	}
 	RideStatus_value = map[string]int32{
 		"RIDE_STATUS_UNSPECIFIED": 0,
 		"RIDE_STATUS_REQUESTED":   1,
-		"RIDE_STATUS_MATCHING":    2,
-		"RIDE_STATUS_MATCHED":     3,
 		"RIDE_STATUS_ACCEPTED":    4,
-		"RIDE_STATUS_IN_PROGRESS": 5,
-		"RIDE_STATUS_COMPLETED":   6,
-		"RIDE_STATUS_CANCELLED":   7,
-		"RIDE_STATUS_FAILED":      8,
 	}
 )
 
@@ -91,14 +75,14 @@ func (RideStatus) EnumDescriptor() ([]byte, []int) {
 }
 
 type Ride struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            *string                `protobuf:"bytes,1,opt,name=id" json:"id,omitempty"`
-	RiderId       *string                `protobuf:"bytes,2,opt,name=rider_id,json=riderId" json:"rider_id,omitempty"`
-	DriverId      *string                `protobuf:"bytes,3,opt,name=driver_id,json=driverId" json:"driver_id,omitempty"`
-	RideStatus    *RideStatus            `protobuf:"varint,4,opt,name=ride_status,json=rideStatus,enum=ride.RideStatus" json:"ride_status,omitempty"`
-	RequestedAt   *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=requested_at,json=requestedAt" json:"requested_at,omitempty"`
-	MatchingAt    *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=matching_at,json=matchingAt" json:"matching_at,omitempty"`
-	MatchedAt     *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=matched_at,json=matchedAt" json:"matched_at,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          *string                `protobuf:"bytes,1,opt,name=id" json:"id,omitempty"`
+	RiderId     *string                `protobuf:"bytes,2,opt,name=rider_id,json=riderId" json:"rider_id,omitempty"`
+	DriverId    *string                `protobuf:"bytes,3,opt,name=driver_id,json=driverId" json:"driver_id,omitempty"`
+	RideStatus  *RideStatus            `protobuf:"varint,4,opt,name=ride_status,json=rideStatus,enum=ride.RideStatus" json:"ride_status,omitempty"`
+	RequestedAt *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=requested_at,json=requestedAt" json:"requested_at,omitempty"`
+	// google.protobuf.Timestamp matching_at = 12;
+	// google.protobuf.Timestamp matched_at = 13;
 	AcceptedAt    *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=accepted_at,json=acceptedAt" json:"accepted_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -165,20 +149,6 @@ func (x *Ride) GetRideStatus() RideStatus {
 func (x *Ride) GetRequestedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.RequestedAt
-	}
-	return nil
-}
-
-func (x *Ride) GetMatchingAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.MatchingAt
-	}
-	return nil
-}
-
-func (x *Ride) GetMatchedAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.MatchedAt
 	}
 	return nil
 }
@@ -379,7 +349,7 @@ type UpdateRideStatusRequest struct {
 	IdempotencyKey *string                `protobuf:"bytes,1,opt,name=idempotency_key,json=idempotencyKey" json:"idempotency_key,omitempty"`
 	RideId         *string                `protobuf:"bytes,2,opt,name=ride_id,json=rideId" json:"ride_id,omitempty"`
 	RideStatus     *RideStatus            `protobuf:"varint,3,opt,name=ride_status,json=rideStatus,enum=ride.RideStatus" json:"ride_status,omitempty"`
-	DriverId       *string                `protobuf:"bytes,4,opt,name=driver_id,json=driverId" json:"driver_id,omitempty"`
+	DriverId       *string                `protobuf:"bytes,4,opt,name=driver_id,json=driverId" json:"driver_id,omitempty"` // Used only for 'accepted'
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -491,7 +461,7 @@ var File_ride_proto protoreflect.FileDescriptor
 const file_ride_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"ride.proto\x12\x04ride\x1a\x1fgoogle/protobuf/timestamp.proto\"\xf5\x02\n" +
+	"ride.proto\x12\x04ride\x1a\x1fgoogle/protobuf/timestamp.proto\"\xfd\x01\n" +
 	"\x04Ride\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\brider_id\x18\x02 \x01(\tR\ariderId\x12\x1b\n" +
@@ -499,10 +469,6 @@ const file_ride_proto_rawDesc = "" +
 	"\vride_status\x18\x04 \x01(\x0e2\x10.ride.RideStatusR\n" +
 	"rideStatus\x12=\n" +
 	"\frequested_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\vrequestedAt\x12;\n" +
-	"\vmatching_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"matchingAt\x129\n" +
-	"\n" +
-	"matched_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tmatchedAt\x12;\n" +
 	"\vaccepted_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"acceptedAt\"X\n" +
 	"\x12RequestRideRequest\x12'\n" +
@@ -524,18 +490,12 @@ const file_ride_proto_rawDesc = "" +
 	"\tdriver_id\x18\x04 \x01(\tB\x05\xaa\x01\x02\b\x01R\bdriverId\":\n" +
 	"\x18UpdateRideStatusResponse\x12\x1e\n" +
 	"\x04ride\x18\x01 \x01(\v2\n" +
-	".ride.RideR\x04ride*\xfc\x01\n" +
+	".ride.RideR\x04ride*^\n" +
 	"\n" +
 	"RideStatus\x12\x1b\n" +
 	"\x17RIDE_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15RIDE_STATUS_REQUESTED\x10\x01\x12\x18\n" +
-	"\x14RIDE_STATUS_MATCHING\x10\x02\x12\x17\n" +
-	"\x13RIDE_STATUS_MATCHED\x10\x03\x12\x18\n" +
-	"\x14RIDE_STATUS_ACCEPTED\x10\x04\x12\x1b\n" +
-	"\x17RIDE_STATUS_IN_PROGRESS\x10\x05\x12\x19\n" +
-	"\x15RIDE_STATUS_COMPLETED\x10\x06\x12\x19\n" +
-	"\x15RIDE_STATUS_CANCELLED\x10\a\x12\x16\n" +
-	"\x12RIDE_STATUS_FAILED\x10\b2\xe2\x01\n" +
+	"\x14RIDE_STATUS_ACCEPTED\x10\x042\xe2\x01\n" +
 	"\vRideService\x12D\n" +
 	"\vRequestRide\x12\x18.ride.RequestRideRequest\x1a\x19.ride.RequestRideResponse\"\x00\x128\n" +
 	"\aGetRide\x12\x14.ride.GetRideRequest\x1a\x15.ride.GetRideResponse\"\x00\x12S\n" +
@@ -569,24 +529,22 @@ var file_ride_proto_goTypes = []any{
 var file_ride_proto_depIdxs = []int32{
 	0,  // 0: ride.Ride.ride_status:type_name -> ride.RideStatus
 	8,  // 1: ride.Ride.requested_at:type_name -> google.protobuf.Timestamp
-	8,  // 2: ride.Ride.matching_at:type_name -> google.protobuf.Timestamp
-	8,  // 3: ride.Ride.matched_at:type_name -> google.protobuf.Timestamp
-	8,  // 4: ride.Ride.accepted_at:type_name -> google.protobuf.Timestamp
-	1,  // 5: ride.RequestRideResponse.ride:type_name -> ride.Ride
-	1,  // 6: ride.GetRideResponse.ride:type_name -> ride.Ride
-	0,  // 7: ride.UpdateRideStatusRequest.ride_status:type_name -> ride.RideStatus
-	1,  // 8: ride.UpdateRideStatusResponse.ride:type_name -> ride.Ride
-	2,  // 9: ride.RideService.RequestRide:input_type -> ride.RequestRideRequest
-	4,  // 10: ride.RideService.GetRide:input_type -> ride.GetRideRequest
-	6,  // 11: ride.RideService.UpdateRideStatus:input_type -> ride.UpdateRideStatusRequest
-	3,  // 12: ride.RideService.RequestRide:output_type -> ride.RequestRideResponse
-	5,  // 13: ride.RideService.GetRide:output_type -> ride.GetRideResponse
-	7,  // 14: ride.RideService.UpdateRideStatus:output_type -> ride.UpdateRideStatusResponse
-	12, // [12:15] is the sub-list for method output_type
-	9,  // [9:12] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	8,  // 2: ride.Ride.accepted_at:type_name -> google.protobuf.Timestamp
+	1,  // 3: ride.RequestRideResponse.ride:type_name -> ride.Ride
+	1,  // 4: ride.GetRideResponse.ride:type_name -> ride.Ride
+	0,  // 5: ride.UpdateRideStatusRequest.ride_status:type_name -> ride.RideStatus
+	1,  // 6: ride.UpdateRideStatusResponse.ride:type_name -> ride.Ride
+	2,  // 7: ride.RideService.RequestRide:input_type -> ride.RequestRideRequest
+	4,  // 8: ride.RideService.GetRide:input_type -> ride.GetRideRequest
+	6,  // 9: ride.RideService.UpdateRideStatus:input_type -> ride.UpdateRideStatusRequest
+	3,  // 10: ride.RideService.RequestRide:output_type -> ride.RequestRideResponse
+	5,  // 11: ride.RideService.GetRide:output_type -> ride.GetRideResponse
+	7,  // 12: ride.RideService.UpdateRideStatus:output_type -> ride.UpdateRideStatusResponse
+	10, // [10:13] is the sub-list for method output_type
+	7,  // [7:10] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_ride_proto_init() }
