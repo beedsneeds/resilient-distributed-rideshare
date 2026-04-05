@@ -189,13 +189,22 @@ func (q *Queries) GetRide(ctx context.Context, id pgtype.UUID) (Ride, error) {
 	return i, err
 }
 
-const listRides = `-- name: ListRides :many
+const getStaleRides = `-- name: GetStaleRides :many
+/* 
+    reconciler Queries
+*/
 SELECT id, rider_id, driver_id, ride_status, requested_at, accepted_at FROM ride
-ORDER BY requested_at
+WHERE ride_status = $1
+  AND requested_at < NOW() - INTERVAL '1 second' * $2
 `
 
-func (q *Queries) ListRides(ctx context.Context) ([]Ride, error) {
-	rows, err := q.db.Query(ctx, listRides)
+type GetStaleRidesParams struct {
+	RideStatus Ridestatus
+	Column2    interface{}
+}
+
+func (q *Queries) GetStaleRides(ctx context.Context, arg GetStaleRidesParams) ([]Ride, error) {
+	rows, err := q.db.Query(ctx, getStaleRides, arg.RideStatus, arg.Column2)
 	if err != nil {
 		return nil, err
 	}
@@ -221,22 +230,48 @@ func (q *Queries) ListRides(ctx context.Context) ([]Ride, error) {
 	return items, nil
 }
 
-const listStaleRides = `-- name: ListStaleRides :many
-/* 
-    reconciler Queries
-*/
-SELECT id, rider_id, driver_id, ride_status, requested_at, accepted_at FROM ride
-WHERE ride_status = $1
-  AND requested_at < NOW() - INTERVAL '1 second' * $2
+const getUnpublishedOutboxEvents = `-- name: GetUnpublishedOutboxEvents :many
+SELECT id, ride_id, stream, created_at, retrieved_at, published_at FROM outbox
+WHERE ride_id = ANY($1::uuid[])
+  AND stream = 'ride.requested'
+  AND published_at IS NULL
 `
 
-type ListStaleRidesParams struct {
-	RideStatus Ridestatus
-	Column2    interface{}
+// DON'T use this during the outbox publishing relay. That's ClaimOutboxEvent
+func (q *Queries) GetUnpublishedOutboxEvents(ctx context.Context, rideIds []pgtype.UUID) ([]Outbox, error) {
+	rows, err := q.db.Query(ctx, getUnpublishedOutboxEvents, rideIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Outbox
+	for rows.Next() {
+		var i Outbox
+		if err := rows.Scan(
+			&i.ID,
+			&i.RideID,
+			&i.Stream,
+			&i.CreatedAt,
+			&i.RetrievedAt,
+			&i.PublishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
-func (q *Queries) ListStaleRides(ctx context.Context, arg ListStaleRidesParams) ([]Ride, error) {
-	rows, err := q.db.Query(ctx, listStaleRides, arg.RideStatus, arg.Column2)
+const listRides = `-- name: ListRides :many
+SELECT id, rider_id, driver_id, ride_status, requested_at, accepted_at FROM ride
+ORDER BY requested_at
+`
+
+func (q *Queries) ListRides(ctx context.Context) ([]Ride, error) {
+	rows, err := q.db.Query(ctx, listRides)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +318,6 @@ const setOutboxPublished = `-- name: SetOutboxPublished :exec
 UPDATE outbox 
 SET published_at = NOW()
 WHERE id = $1
-RETURNING id, ride_id, stream, created_at, retrieved_at, published_at
 `
 
 func (q *Queries) SetOutboxPublished(ctx context.Context, id pgtype.UUID) error {

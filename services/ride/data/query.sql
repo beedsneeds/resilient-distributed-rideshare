@@ -94,22 +94,29 @@ RETURNING *;
 -- name: SetOutboxPublished :exec
 UPDATE outbox 
 SET published_at = NOW()
-WHERE id = $1
-RETURNING *;
+WHERE id = $1;
 
 /* 
     reconciler Queries
 */
--- name: ListStaleRides :many
+-- name: GetStaleRides :many
 SELECT * FROM ride
 WHERE ride_status = $1
   AND requested_at < NOW() - INTERVAL '1 second' * $2;
 
+-- DON'T use this during the outbox publishing relay. That's ClaimOutboxEvent
+-- name: GetUnpublishedOutboxEvents :many
+SELECT * FROM outbox
+WHERE ride_id = ANY(@ride_ids::uuid[])
+  AND stream = 'ride.requested'
+  AND published_at IS NULL;
+
+
 /* 
 * We assume rider_id don't make multiple requests within duplicateRideThreshold seconds
 */
--- -- name: GetDuplicatedRides :many
--- -- PROBLEM WITH HAVING
+-- name: GetDuplicatedRides :many
+-- PROBLEM WITH HAVING
 -- SELECT rider_id, count(*)  FROM ride
 --   WHERE requested_at < NOW() - INTERVAL '1 second' * $1
 -- ORDER BY rider_id 

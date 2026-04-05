@@ -242,6 +242,42 @@ func (q *Queries) GetRandomAvailableDriver(ctx context.Context) (Driver, error) 
 	return i, err
 }
 
+const getUnpublishedOutboxEvents = `-- name: GetUnpublishedOutboxEvents :many
+SELECT id, ride_id, stream, payload, created_at, retrieved_at, published_at FROM outbox
+WHERE ride_id = ANY($1::uuid[])
+  AND stream = 'ride.requested'
+  AND published_at IS NULL
+`
+
+// DON'T use this during the outbox publishing relay. That's ClaimOutboxEvent
+func (q *Queries) GetUnpublishedOutboxEvents(ctx context.Context, rideIds []pgtype.UUID) ([]Outbox, error) {
+	rows, err := q.db.Query(ctx, getUnpublishedOutboxEvents, rideIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Outbox
+	for rows.Next() {
+		var i Outbox
+		if err := rows.Scan(
+			&i.ID,
+			&i.RideID,
+			&i.Stream,
+			&i.Payload,
+			&i.CreatedAt,
+			&i.RetrievedAt,
+			&i.PublishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDrivers = `-- name: ListDrivers :many
 SELECT id, name, status FROM driver
 ORDER BY name
@@ -309,6 +345,7 @@ const updateDriverStatus = `-- name: UpdateDriverStatus :exec
 UPDATE driver
 SET status = $2
 WHERE id = $1
+    AND status = 'available'
 `
 
 type UpdateDriverStatusParams struct {

@@ -107,3 +107,10 @@ WHERE id = $1;
 -- name: GetBusyDrivers :many
 SELECT * FROM driver
 WHERE status = 'busy';
+
+-- DON'T use this during the outbox publishing relay. That's ClaimOutboxEvent
+-- name: GetUnpublishedOutboxEvents :many
+SELECT * FROM outbox
+WHERE ride_id = ANY(@ride_ids::uuid[])
+  AND stream = 'ride.requested'
+  AND published_at IS NULL;
