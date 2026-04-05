@@ -17,6 +17,21 @@ import (
 
 var serverAddr = flag.String("addr", "localhost:50051", "The server address in the format of host:port")
 
+// Jitter is +-20% backoff
+var retryPolicy = `{
+	"methodConfig": [{
+		"name": [{"service": "ride.RideService"}],
+
+		"retryPolicy": {
+			"MaxAttempts": 4,
+			"InitialBackoff": ".01s",
+			"MaxBackoff": "1s",
+			"BackoffMultiplier": 2,
+            "RetryableStatusCodes": ["UNAVAILABLE", "DEADLINE_EXCEEDED"]
+		}
+	}]
+}`
+
 func requestRide(client ridepb.RideServiceClient, riderID string) (*ridepb.RequestRideResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -36,7 +51,7 @@ func main() {
 	flag.Parse()
 
 	// https://github.com/grpc/grpc-go/blob/master/examples/route_guide/client/client.go
-	conn, err := grpc.NewClient(*serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(*serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithDefaultServiceConfig(retryPolicy))
 	if err != nil {
 		log.Fatalf("could not dial: %v", err)
 	}
