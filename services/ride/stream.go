@@ -7,7 +7,7 @@ import (
 	"log"
 	"time"
 
-	// matchingdata "github.com/beedsneeds/resilient-distributed-rideshare/services/matching/data"
+	"github.com/beedsneeds/resilient-distributed-rideshare/faultinject"
 	ridedata "github.com/beedsneeds/resilient-distributed-rideshare/services/ride/data"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -55,6 +55,9 @@ func processRideAcceptedStatus(ctx context.Context, s *rideServiceServer, consum
 		if err != nil {
 			return fmt.Errorf("SetRideAccepted failed: %v", err)
 		}
+
+		// Crash rollsback status update transaction and message stays in PEL - Verifies deduplication table
+		faultinject.Injectf(faultinject.RideAcceptedBeforeCommit, "rideID=%s msgID=%s", ride.ID, msg.ID)
 
 		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("tx commit failed: %v", err)

@@ -12,8 +12,10 @@ import (
 	"net"
 
 	"encoding/json"
+
 	"golang.org/x/sync/errgroup"
 
+	"github.com/beedsneeds/resilient-distributed-rideshare/faultinject"
 	matchingdata "github.com/beedsneeds/resilient-distributed-rideshare/services/matching/data"
 	"github.com/go-redsync/redsync/v4"
 	"github.com/go-redsync/redsync/v4/redis/goredis/v9"
@@ -102,17 +104,21 @@ func tryDriver(s matchingServiceServer, ctx context.Context, rideID uuid.UUID, d
 		return matchingdata.Driver{}, fmt.Errorf("UpdateDriverStatus failed: %v", err)
 	}
 
-	if _, err = qtx.CreateOutboxEvent(ctx, matchingdata.CreateOutboxEventParams{
+	event, err := qtx.CreateOutboxEvent(ctx, matchingdata.CreateOutboxEventParams{
 		RideID:  pgtype.UUID{Bytes: rideID, Valid: true},
 		Stream:  matchingdata.StreamRideaccepted,
 		Payload: payload,
-	}); err != nil {
+	})
+	if err != nil {
 		return matchingdata.Driver{}, fmt.Errorf("CreateOutboxEvent failed: %v", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return matchingdata.Driver{}, fmt.Errorf("tx commit failed: %v", err)
 	}
+
+	// Driver is matched, is busy and outbox written but processed message is not Acked - Lock should auto-expire and we should get an errAlreadyMatched
+	faultinject.Injectf(faultinject.MatchingTryDriverAfterCommit, "rideID=%s outboxID=%s", event.RideID, event.ID)
 
 	return driver, nil
 }
@@ -253,7 +259,7 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 }
 
 func publishOutboxEvents(ctx context.Context, s matchingServiceServer) error {
-	const outboxTimeOut = 30
+	const outboxTimeOut = 15
 	for {
 		event, err := s.queries.ClaimOutboxEvent(ctx, outboxTimeOut)
 		if err == pgx.ErrNoRows {
@@ -276,6 +282,9 @@ func publishOutboxEvents(ctx context.Context, s matchingServiceServer) error {
 			continue
 		}
 
+		// Crash after an event is claimed but before its processed - this event should republish after outboxTimeOut seconds
+		faultinject.Injectf(faultinject.MatchingOutboxAfterClaim, "rideID=%s outboxID=%s", event.RideID, event.ID)
+
 		xargs := redis.XAddArgs{
 			Stream: string(event.Stream),
 			ID:     "*",
@@ -289,6 +298,9 @@ func publishOutboxEvents(ctx context.Context, s matchingServiceServer) error {
 			log.Printf("failed to publish ride event: %v", err)
 			continue
 		}
+
+		// Crash after message is published but outbox status is not updated, thus will be republished - tests consumer deduplication
+		faultinject.Injectf(faultinject.MatchingOutboxAfterXAdd, "rideID=%s outboxID=%s", event.RideID, event.ID)
 
 		if err = s.queries.SetOutboxPublished(ctx, event.ID); err != nil {
 			log.Printf("Query SetOutboxPublished failed: %v", err)

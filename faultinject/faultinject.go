@@ -18,17 +18,18 @@ const (
 // Implemented injection points:
 // Using consts to prevent misspellings
 const (
-	// Tests RequestRide idempotency on retry
+	// Crash results in another ride being created since rider did not receive a response - Tests RequestRide idempotency on retries
 	RideRequestAfterCommit = "ride.request.after_commit"
-	// Recovery behavior: Rollsback transaction and message stays in PEL
+	// Crash rollsback status update transaction and message stays in PEL - Verifies deduplication table
 	RideAcceptedBeforeCommit = "ride.accepted.before_commit"
-
+	// Driver is matched, is busy and outbox written but processed message is not Acked - Lock should auto-expire and we should get an errAlreadyMatched
 	MatchingTryDriverAfterCommit = "matching.trydriver.after_commit"
-
+	// Crash after an event is claimed but before its processed - this event should republish after outboxTimeOut seconds
 	MatchingOutboxAfterClaim = "matching.outbox.after_claim"
-	MatchingOutboxAfterXAdd  = "matching.outbox.after_xadd"
 	RideOutboxAfterClaim     = "ride.outbox.after_claim"
-	RideOutboxAfterXAdd      = "ride.outbox.after_xadd"
+	// Crash after message is published but outbox status is not updated, thus will be republished - tests consumer deduplication
+	MatchingOutboxAfterXAdd = "matching.outbox.after_xadd"
+	RideOutboxAfterXAdd     = "ride.outbox.after_xadd"
 )
 
 var knownPoints = map[string]struct{}{

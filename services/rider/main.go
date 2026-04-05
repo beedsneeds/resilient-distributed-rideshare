@@ -9,6 +9,7 @@ import (
 
 	ridepb "github.com/beedsneeds/resilient-distributed-rideshare/proto/ride"
 	riderdata "github.com/beedsneeds/resilient-distributed-rideshare/services/rider/data"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -36,9 +37,11 @@ func requestRide(client ridepb.RideServiceClient, riderID string) (*ridepb.Reque
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	idempotencyKey := uuid.New().String()
+
 	ride, err := client.RequestRide(ctx, &ridepb.RequestRideRequest{
 		// TODO implement actual idempotency with redis
-		IdempotencyKey: &riderID,
+		IdempotencyKey: &idempotencyKey,
 		RiderId:        &riderID,
 	})
 	if err != nil {

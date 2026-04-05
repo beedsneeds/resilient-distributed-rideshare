@@ -36,6 +36,11 @@ CREATE TABLE deduplication (
     UNIQUE (ride_id, stream) -- composite key that identifies a unique ride having only one unique operation
 );
 
+CREATE TABLE requestDedup (
+    idempKey        UUID                PRIMARY KEY DEFAULT gen_random_uuid(),
+    ride_id         UUID
+);
+
 CREATE TABLE outbox (
     id          UUID   PRIMARY KEY DEFAULT gen_random_uuid(), 
     ride_id          UUID NOT NULL, -- not using ride_id as pk because I'll add other event types, so ride_id won't be unique

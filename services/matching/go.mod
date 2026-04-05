@@ -1,8 +1,9 @@
 module github.com/beedsneeds/resilient-distributed-rideshare/services/matching
 
-go 1.25.6
+go 1.25.8
 
 require (
+	github.com/beedsneeds/resilient-distributed-rideshare/faultinject v0.0.0-20260405200737-f28242bb75f1
 	github.com/beedsneeds/resilient-distributed-rideshare/proto v0.0.0-20260321163956-4e331d219b22
 	github.com/go-redsync/redsync/v4 v4.16.0
 	github.com/google/uuid v1.6.0

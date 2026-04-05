@@ -86,6 +86,10 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid rider ID: %v", err)
 	}
+	idempotencyKey, err := uuid.Parse(request.GetIdempotencyKey())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid idempotency ID: %v", err)
+	}
 
 	// Atomically publish to outbox table while creating ride
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -96,6 +100,20 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 
 	qtx := s.queries.WithTx(tx)
 
+	// Deduplication
+	rideID, err := qtx.CreateReqDedupEntry(ctx, pgtype.UUID{Bytes: idempotencyKey, Valid: true})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "CreateReqDedupEntry failed: %v", err)
+	}
+	if rideID.Valid {
+		log.Printf("ride already requested with ID %s, skipping", rideID)
+		ride, err := qtx.GetRide(ctx, rideID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "GetRide failed: %v", err)
+		}
+		return &ridepb.RequestRideResponse{Ride: pgRidetoProtoRide(ride)}, nil
+	}
+
 	newRide, err := qtx.CreateRide(ctx, ridedata.CreateRideParams{
 		ID:      pgtype.UUID{Bytes: newRideID, Valid: true},
 		RiderID: pgtype.UUID{Bytes: riderID, Valid: true},
@@ -104,7 +122,7 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 		return nil, status.Errorf(codes.Internal, "CreateRide failed: %v", err)
 	}
 
-	_, err = qtx.CreateOutboxEvent(ctx, ridedata.CreateOutboxEventParams{
+	event, err := qtx.CreateOutboxEvent(ctx, ridedata.CreateOutboxEventParams{
 		RideID: pgtype.UUID{Bytes: newRideID, Valid: true},
 		Stream: ridedata.StreamRiderequested,
 	})
@@ -112,9 +130,19 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 		return nil, status.Errorf(codes.Internal, "CreateOutboxEvent failed: %v", err)
 	}
 
+	if err = qtx.InsertRedDedupRide(ctx, ridedata.InsertRedDedupRideParams{
+		Idempkey: pgtype.UUID{Bytes: idempotencyKey, Valid: true},
+		RideID:   pgtype.UUID{Bytes: newRideID, Valid: true},
+	}); err != nil {
+		return nil, status.Errorf(codes.Internal, "InsertRedDedupRide failed: %v", err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, status.Errorf(codes.Internal, "commit failed: %v", err)
 	}
+
+	// Crash results in another ride being created since rider did not receive a response - Tests RequestRide idempotency on retries
+	faultinject.Injectf(faultinject.RideRequestAfterCommit, "rideID=%s outboxID=%s", event.RideID, event.ID)
 
 	return &ridepb.RequestRideResponse{
 		Ride: pgRidetoProtoRide(newRide),
@@ -122,7 +150,7 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 }
 
 func publishOutboxEvents(ctx context.Context, s rideServiceServer) error {
-	const outboxTimeOut = 30
+	const outboxTimeOut = 15
 	// // This is reused in reconciler/main.go
 	for {
 		event, err := s.queries.ClaimOutboxEvent(ctx, outboxTimeOut)
@@ -134,6 +162,9 @@ func publishOutboxEvents(ctx context.Context, s rideServiceServer) error {
 			return fmt.Errorf("Query GetOutboxRow failed: %v", err)
 		}
 
+		// Crash after an event is claimed but before its processed - this event should republish after outboxTimeOut seconds
+		faultinject.Injectf(faultinject.RideOutboxAfterClaim, "rideID=%s outboxID=%s", event.RideID, event.ID)
+
 		xargs := redis.XAddArgs{
 			Stream: string(event.Stream),
 			ID:     "*",
@@ -144,6 +175,9 @@ func publishOutboxEvents(ctx context.Context, s rideServiceServer) error {
 			log.Printf("failed to publish ride event: %v", err)
 			continue
 		}
+
+		// Crash after message is published but outbox status is not updated, thus will be republished - tests consumer deduplication
+		faultinject.Injectf(faultinject.RideOutboxAfterXAdd, "rideID=%s outboxID=%s", event.RideID, event.ID)
 
 		if err = s.queries.SetOutboxPublished(ctx, event.ID); err != nil {
 			log.Printf("Query SetOutboxPublished failed: %v", err)

@@ -112,6 +112,11 @@ type Outbox struct {
 	PublishedAt pgtype.Timestamp
 }
 
+type Requestdedup struct {
+	Idempkey pgtype.UUID
+	RideID   pgtype.UUID
+}
+
 type Ride struct {
 	ID          pgtype.UUID
 	RiderID     pgtype.UUID

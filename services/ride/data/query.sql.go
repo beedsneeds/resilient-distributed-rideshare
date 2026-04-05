@@ -128,6 +128,24 @@ func (q *Queries) CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventPa
 	return i, err
 }
 
+const createReqDedupEntry = `-- name: CreateReqDedupEntry :one
+INSERT INTO requestDedup (
+    idempKey
+) VALUES (
+    $1
+) ON CONFLICT (
+    idempKey
+) DO NOTHING
+RETURNING ride_id
+`
+
+func (q *Queries) CreateReqDedupEntry(ctx context.Context, idempkey pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, createReqDedupEntry, idempkey)
+	var ride_id pgtype.UUID
+	err := row.Scan(&ride_id)
+	return ride_id, err
+}
+
 const createRide = `-- name: CreateRide :one
 INSERT INTO ride (
   id, rider_id
@@ -265,6 +283,22 @@ func (q *Queries) GetUnpublishedOutboxEvents(ctx context.Context, rideIds []pgty
 	return items, nil
 }
 
+const insertRedDedupRide = `-- name: InsertRedDedupRide :exec
+UPDATE requestDedup 
+SET  ride_id = $2
+WHERE idempKey = $1
+`
+
+type InsertRedDedupRideParams struct {
+	Idempkey pgtype.UUID
+	RideID   pgtype.UUID
+}
+
+func (q *Queries) InsertRedDedupRide(ctx context.Context, arg InsertRedDedupRideParams) error {
+	_, err := q.db.Exec(ctx, insertRedDedupRide, arg.Idempkey, arg.RideID)
+	return err
+}
+
 const listRides = `-- name: ListRides :many
 SELECT id, rider_id, driver_id, ride_status, requested_at, accepted_at FROM ride
 ORDER BY requested_at
@@ -309,6 +343,7 @@ type SetDedupProcessedParams struct {
 	Stream Stream
 }
 
+// don't currently use this
 func (q *Queries) SetDedupProcessed(ctx context.Context, arg SetDedupProcessedParams) error {
 	_, err := q.db.Exec(ctx, setDedupProcessed, arg.RideID, arg.Stream)
 	return err

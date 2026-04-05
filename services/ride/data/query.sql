@@ -57,11 +57,28 @@ SELECT * FROM deduplication
 WHERE ride_id = $1
   AND stream = $2;
 
+-- don't currently use this
 -- name: SetDedupProcessed :exec
 UPDATE deduplication 
 SET processed_at = NOW()
 WHERE ride_id = $1 
     AND stream = $2;
+
+-- name: CreateReqDedupEntry :one
+INSERT INTO requestDedup (
+    idempKey
+) VALUES (
+    $1
+) ON CONFLICT (
+    idempKey
+) DO UPDATE 
+SET idempKey = EXCLUDED.idempKey
+RETURNING ride_id;
+
+-- name: InsertRedDedupRide :exec
+UPDATE requestDedup 
+SET  ride_id = $2
+WHERE idempKey = $1;
 
 /* 
 * Outbox

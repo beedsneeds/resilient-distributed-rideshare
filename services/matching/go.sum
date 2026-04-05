@@ -1,3 +1,5 @@
+github.com/beedsneeds/resilient-distributed-rideshare/faultinject v0.0.0-20260405200737-f28242bb75f1 h1:w04/qqVveYmP2mOIXSDpani9Od/Ilf+jQOgWkhUCFTI=
+github.com/beedsneeds/resilient-distributed-rideshare/faultinject v0.0.0-20260405200737-f28242bb75f1/go.mod h1:/2EDnbCLb0EjgwTz0wbvRCAHm3h/T70/4nSYVbUwfQI=
 github.com/beedsneeds/resilient-distributed-rideshare/proto v0.0.0-20260321163956-4e331d219b22 h1:Z17IFh/k2lJFHx/rdxYt3rtVTkqk/Z0MijxgOViaSd8=
 github.com/beedsneeds/resilient-distributed-rideshare/proto v0.0.0-20260321163956-4e331d219b22/go.mod h1:NqyY7r8MCSVC8KiV1K23cJdwg8lqixjjs2gj2iCyX9c=
 github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=

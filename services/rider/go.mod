@@ -4,6 +4,7 @@ go 1.25.6
 
 require (
 	github.com/beedsneeds/resilient-distributed-rideshare/proto v0.0.0-20260227032541-6e16dadd1e80
+	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.8.0
 	google.golang.org/grpc v1.79.1
 )
