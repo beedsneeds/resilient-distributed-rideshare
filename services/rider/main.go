@@ -24,7 +24,7 @@ var retryPolicy = `{
 
 		"retryPolicy": {
 			"MaxAttempts": 4,
-			"InitialBackoff": ".01s",
+			"InitialBackoff": ".1s",
 			"MaxBackoff": "1s",
 			"BackoffMultiplier": 2,
             "RetryableStatusCodes": ["UNAVAILABLE", "DEADLINE_EXCEEDED"]

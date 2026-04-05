@@ -8,8 +8,10 @@ import (
 	"net"
 	"time"
 
+	"github.com/beedsneeds/resilient-distributed-rideshare/faultinject"
 	ridepb "github.com/beedsneeds/resilient-distributed-rideshare/proto/ride"
 	ridedata "github.com/beedsneeds/resilient-distributed-rideshare/services/ride/data"
+
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 
