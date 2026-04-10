@@ -63,7 +63,7 @@ func processRideAcceptedStatus(ctx context.Context, s *rideServiceServer, consum
 			return fmt.Errorf("tx commit failed: %v", err)
 		}
 
-		log.Printf("message ID: %s rideID: %s accepted driver %s", msg.ID, rideID, ride.DriverID)
+		// log.Printf("message ID: %s rideID: %s accepted driver %s for rider %s", msg.ID, rideID, ride.DriverID, ride.RiderID)
 		return nil
 	})
 }
@@ -78,6 +78,10 @@ func processStream(ctx context.Context, s *rideServiceServer, stream, consgroup,
 	}
 
 	for {
+		if ctx.Err() != nil {
+			log.Printf("context error propagated")
+			return ctx.Err()
+		}
 		var currID string
 		if checkBacklog {
 			currID = lastID
@@ -93,7 +97,7 @@ func processStream(ctx context.Context, s *rideServiceServer, stream, consgroup,
 		}).Result()
 		if err == redis.Nil {
 			// block timed out, no messages
-			log.Printf("[%s] [%s] No new messages", time.Now().Format("15:04:05"), stream)
+			log.Printf("[%s] [%s] No new messages \n", time.Now().Format("15:04:05"), stream)
 			continue
 		}
 		if err != nil {
@@ -120,7 +124,8 @@ func processStream(ctx context.Context, s *rideServiceServer, stream, consgroup,
 		if err != nil {
 			log.Printf("XAck failed for message %s: %v", message.ID, err)
 		} else {
-			log.Printf("[%s] Successfully processed message %s", stream, message.ID)
+			// This log message is grepped in faults.sh
+			log.Printf("[%s] Successfully processed message %s \n", stream, message.ID)
 		}
 		lastID = message.ID
 	}

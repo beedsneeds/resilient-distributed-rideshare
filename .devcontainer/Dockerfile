@@ -2,7 +2,7 @@ FROM mcr.microsoft.com/devcontainers/go:2-1.25-trixie
 
 # [Optional] Uncomment this section to install additional OS packages.
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
-    && apt-get -y install --no-install-recommends postgresql-client \
+    && apt-get -y install --no-install-recommends postgresql-client redis-tools \
     && PB_REL="https://github.com/protocolbuffers/protobuf/releases" \
     && curl -LO $PB_REL/download/v33.5/protoc-33.5-linux-x86_64.zip \
     && unzip protoc-33.5-linux-x86_64.zip -d /usr/local \

@@ -106,11 +106,13 @@ func (s *rideServiceServer) RequestRide(ctx context.Context, request *ridepb.Req
 		return nil, status.Errorf(codes.Internal, "CreateReqDedupEntry failed: %v", err)
 	}
 	if rideID.Valid {
+		// This log message is grepped in faults.sh
 		log.Printf("ride already requested with ID %s, skipping", rideID)
 		ride, err := qtx.GetRide(ctx, rideID)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "GetRide failed: %v", err)
 		}
+		// Don't need to commit since we didn't write anything. defer rollback
 		return &ridepb.RequestRideResponse{Ride: pgRidetoProtoRide(ride)}, nil
 	}
 
@@ -255,10 +257,41 @@ func main() {
 		log.Printf("Processing Ride Accepted Status Updates...")
 		return processRideAcceptedStatus(ctx, rideServer, consumer)
 	})
+	// g.Go(func() error {
+	// 	const consumer = "ride-1" // TODO don't hard code this
+	// 	for {
+	// 		log.Printf("Processing Ride Accepted Status Updates...")
+	// 		if err := processRideAcceptedStatus(ctx, rideServer, consumer); err != nil {
+	// 			if ctx.Err() != nil {
+	// 				// propagate to the errgroup only if the context is already cancelled
+	// 				// else recover
+	// 				return ctx.Err()
+	// 			}
+	// 			log.Printf("processRideAcceptedStatus exited with error, restarting: %v", err)
+	// 		}
+	// 		select {
+	// 		case <-ctx.Done():
+	// 			return ctx.Err()
+	// 		case <-time.After(time.Second):
+	// 		}
+	// 	}
+	// })
 	// Outbox publisher
 	g.Go(func() error {
-		log.Printf("Publishing New Rides...")
-		return publishOutboxEvents(ctx, *rideServer)
+		for {
+			log.Printf("Publishing New Rides...")
+			if err := publishOutboxEvents(ctx, *rideServer); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				log.Printf("publishOutboxEvents exited with error, restarting: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+			}
+		}
 	})
 
 	// Serving gRPC requests

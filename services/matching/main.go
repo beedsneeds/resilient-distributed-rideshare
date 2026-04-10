@@ -127,14 +127,14 @@ func tryDriver(s matchingServiceServer, ctx context.Context, rideID uuid.UUID, d
 // Dedup to prevent same ride from being matched twice
 func matchDriver(ctx context.Context, s matchingServiceServer, rideID uuid.UUID) (matchingdata.Driver, error) {
 	// Hardcoding max number of drivers to offer requests
-	drivers, err := s.queries.GetNRandomAvailableDrivers(context.Background(), int32(5))
+	drivers, err := s.queries.GetNRandomAvailableDrivers(ctx, int32(5))
 	if err != nil {
 		return matchingdata.Driver{}, fmt.Errorf("GetNRandomAvailableDrivers failed: %v", err)
 	}
 	if len(drivers) == 0 {
 		log.Printf("Ran out of drivers, resetting state")
-		s.queries.ResetAllDriversToAvailable(context.Background())
-		drivers, err = s.queries.GetNRandomAvailableDrivers(context.Background(), int32(5))
+		s.queries.ResetAllDriversToAvailable(ctx)
+		drivers, err = s.queries.GetNRandomAvailableDrivers(ctx, int32(5))
 		if err != nil || len(drivers) == 0 {
 			return matchingdata.Driver{}, fmt.Errorf("GetNRandomAvailableDrivers failed after reset: no available drivers")
 		}
@@ -172,6 +172,10 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 	}
 
 	for {
+		if ctx.Err() != nil {
+			log.Printf("context error propagated")
+			return ctx.Err()
+		}
 		var currID string
 		if checkBacklog {
 			currID = lastID
@@ -188,8 +192,7 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 		}).Result()
 		if err == redis.Nil {
 			// block timed out, no messages
-			log.Printf("[%s] [ride.requested] No new messages", time.Now().Format("15:04:05"))
-
+			log.Printf("[%s] [ride.requested] No new messages \n", time.Now().Format("15:04:05"))
 			continue
 		}
 		if err != nil {
@@ -230,7 +233,7 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 		}
 
 		// Match driver currently doesn't use rideID but it ideally takes rider location while matching
-		driver, err := matchDriver(ctx, s, rideID)
+		_, err = matchDriver(ctx, s, rideID)
 		if err != nil {
 			if errors.Is(err, errAlreadyMatched) {
 				if err := s.messages.XAck(ctx, "ride.requested", consgroup, message.ID).Err(); err != nil {
@@ -247,12 +250,13 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 			}
 		}
 
-		log.Printf("Driver %v accepted ride with ID %v", driver, rideID)
+		// log.Printf("Driver %v accepted ride with ID %v \n", driver, rideID)
 
 		if err := s.messages.XAck(ctx, "ride.requested", consgroup, message.ID).Err(); err != nil {
 			log.Printf("XAck failed for message %s: %v", message.ID, err)
 		} else {
-			log.Printf("[ride.requested] Successfully processed message %s (rideID: %s)", message.ID, rideID)
+			// This log message is grepped in faults.sh
+			log.Printf("[ride.requested] Successfully processed message %s (rideID: %s) \n", message.ID, rideID)
 		}
 		lastID = message.ID
 	}
@@ -361,6 +365,7 @@ func main() {
 
 	// Readiness goroutine that maintains service status by pinging dependencies
 	g.Go(func() error {
+		healthy := true
 		for {
 			select {
 			case <-ctx.Done():
@@ -370,25 +375,65 @@ func main() {
 			err1 := s.pgxpool.Ping(ctx)
 			err2 := s.messages.Ping(ctx).Err()
 			if err1 == nil && err2 == nil {
+				if !healthy {
+					log.Printf("Service recovered: dependencies are healthy")
+					healthy = true
+				}
 				healthServer.SetServingStatus("readiness", grpc_health_v1.HealthCheckResponse_SERVING)
 			} else {
+				if healthy {
+					log.Printf("Service degraded: postgres=%v redis=%v", err1, err2)
+					healthy = false
+				} else {
+					log.Printf("Service still degraded: postgres=%v redis=%v", err1, err2)
+				}
 				healthServer.SetServingStatus("readiness", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
-				log.Printf("readiness check failed: postgres=%v redis=%v", err1, err2)
 			}
 		}
 	})
 
-	// Consume messages
 	g.Go(func() error {
-		const consumer = "matching-1" // TODO don't hard code this
-		log.Printf("Processing Ride Requests...")
+		const consumer = "ride-1" // TODO don't hard code this
+		log.Printf("Processing Ride Accepted Status Updates...")
 		return processRideRequests(ctx, *s, consumer)
 	})
+	// // Consume messages
+	// g.Go(func() error {
+	// 	const consumer = "matching-1" // TODO don't hard code this
+	// 	for {
+	// 		log.Printf("Processing Ride Requests...")
+	// 		if err := processRideRequests(ctx, *s, consumer); err != nil {
+	// 			if ctx.Err() != nil {
+	// 				// propagate to the errgroup only if the context is already cancelled
+	// 				// else recover
+	// 				return ctx.Err()
+	// 			}
+	// 			log.Printf("processRideRequests exited with error, restarting: %v", err)
+	// 		}
+	// 		select {
+	// 		case <-ctx.Done():
+	// 			return ctx.Err()
+	// 		case <-time.After(time.Second):
+	// 		}
+	// 	}
+	// })
 
 	// Outbox publisher
 	g.Go(func() error {
-		log.Printf("Publishing New Rides...")
-		return publishOutboxEvents(ctx, *s)
+		for {
+			log.Printf("Publishing New Rides...")
+			if err := publishOutboxEvents(ctx, *s); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				log.Printf("publishOutboxEvents exited with error, restarting: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+			}
+		}
 	})
 
 	// Serving gRPC requests
