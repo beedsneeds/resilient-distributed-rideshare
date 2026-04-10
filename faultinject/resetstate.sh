@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# faultinjection/reset.sh — wipe all test state. Safe to run anytime.
+# Wipes all test state. Safe to run anytime.
 #
 # Clears Redis (streams, consumer groups, PEL, locks), truncates dedup +
 # outbox tables in both service DBs, resets drivers to available, then
 # recreates the consumer groups so the still-running services can keep
-# consuming without needing a restart.
+# consuming without needing a restart
 set -euo pipefail
 
 echo "flushing redis..."

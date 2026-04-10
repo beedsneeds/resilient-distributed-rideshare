@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
-# faultinjection/test.sh — drive a fault scenario and verify recovery.
 #
-# Prereqs: ride, matching, and rider services running in separate terminals
-# inside the devcontainer, each piping output to /tmp/<svc>-service.log via tee.
-#
+# Prereqs: ride, matching, rider and reconciler services running in separate terminals.
 # Workflow per scenario:
-#   0. reset state (calls reset.sh)
+#   0. reset state (calls resetstate.sh)
 #   1. prompt you to restart the target service with FAULT_INJECT armed
 #   2. check half-state in postgres + redis immediately after crash
+#         Each scenario's check_halfstate captures the target rideID during the crash window
 #   3. prompt you to restart the target service clean
 #   4. wait for claim timeout / recovery
-#   5. grep logs for the expected recovery line, then run optional post-recovery checks
+#   5. check_recovery asserts invariants about that specific ride after the recovery window closes.
+#         Verification is done entirely through psql and redis-cli, not logs because its not working reliably
+
 set -euo pipefail
+
+MATCHING_DB="postgres://postgres:postgres@matching-db:5432/matching_db"
+RIDE_DB="postgres://postgres:postgres@ride-db:5432/ride_db"
+REDIS="-h redis"
+
+# stuck_ride is populated by check_halfstate and consumed by check_recovery.
+stuck_ride=""
 
 scenario="${1:-}"
 
@@ -20,134 +27,172 @@ case "$scenario" in
     fault="matching.outbox.after_xadd:exit"
     target_svc="matching"
     check_halfstate() {
-      echo "  matching outbox (expect >=1 claimed-but-unpublished):"
-      psql postgres://postgres:postgres@matching-db:5432/matching_db -tAc \
-        "SELECT count(*) FROM outbox WHERE retrieved_at IS NOT NULL AND published_at IS NULL;" \
-        | xargs -I{} echo "    unpublished-but-claimed: {}"
-      echo "  ride.accepted stream (expect >=1, the ghost):"
-      redis-cli -h redis XLEN ride.accepted | xargs -I{} echo "    length: {}"
+      stuck_ride=$(psql "$MATCHING_DB" -tAc \
+        "SELECT ride_id FROM outbox WHERE stream='ride.accepted' AND retrieved_at IS NOT NULL AND published_at IS NULL ORDER BY id DESC LIMIT 1")
+      [[ -z "$stuck_ride" ]] && { echo "  FAIL: no stuck matching outbox row"; return 1; }
+      echo "  captured rideID: $stuck_ride"
+      echo "  ride.accepted stream length: $(redis-cli $REDIS XLEN ride.accepted)"
     }
-    expect_log="ride may have already matched"
-    expect_in="ride"
+    check_recovery() {
+      local published dedup pel
+      published=$(psql "$MATCHING_DB" -tAc "SELECT count(*) FROM outbox WHERE ride_id='$stuck_ride' AND published_at IS NOT NULL")
+      dedup=$(psql "$RIDE_DB" -tAc "SELECT count(*) FROM deduplication WHERE ride_id='$stuck_ride' AND stream='ride.accepted'")
+      pel=$(redis-cli $REDIS XPENDING ride.accepted ride-group | head -1)
+      echo "  stuck row published: $published (want 1)"
+      echo "  ride dedup entries:  $dedup (want 1)"
+      echo "  ride-group PEL:      $pel (want 0)"
+      [[ "$published" == "1" && "$dedup" == "1" && "$pel" == "0" ]]
+    }
     ;;
 
   ride-ghost-message)
     fault="ride.outbox.after_xadd:exit"
     target_svc="ride"
     check_halfstate() {
-      echo "  ride outbox (expect >=1 claimed-but-unpublished):"
-      psql postgres://postgres:postgres@ride-db:5432/ride_db -tAc \
-        "SELECT count(*) FROM outbox WHERE retrieved_at IS NOT NULL AND published_at IS NULL;" \
-        | xargs -I{} echo "    unpublished-but-claimed: {}"
-      echo "  ride.requested stream (expect >=1, the ghost):"
-      redis-cli -h redis XLEN ride.requested | xargs -I{} echo "    length: {}"
+      stuck_ride=$(psql "$RIDE_DB" -tAc \
+        "SELECT ride_id FROM outbox WHERE stream='ride.requested' AND retrieved_at IS NOT NULL AND published_at IS NULL ORDER BY id DESC LIMIT 1")
+      [[ -z "$stuck_ride" ]] && { echo "  FAIL: no stuck ride outbox row"; return 1; }
+      echo "  captured rideID: $stuck_ride"
+      echo "  ride.requested stream length: $(redis-cli $REDIS XLEN ride.requested)"
     }
-    expect_log="duplicate ride"
-    expect_in="matching"
+    check_recovery() {
+      local published dedup pel
+      published=$(psql "$RIDE_DB" -tAc "SELECT count(*) FROM outbox WHERE ride_id='$stuck_ride' AND published_at IS NOT NULL")
+      dedup=$(psql "$MATCHING_DB" -tAc "SELECT count(*) FROM deduplication WHERE ride_id='$stuck_ride' AND stream='ride.requested'")
+      pel=$(redis-cli $REDIS XPENDING ride.requested matching-group | head -1)
+      echo "  stuck row published:  $published (want 1)"
+      echo "  matching dedup:       $dedup (want 1)"
+      echo "  matching-group PEL:   $pel (want 0)"
+      [[ "$published" == "1" && "$dedup" == "1" && "$pel" == "0" ]]
+    }
     ;;
 
   matching-claim-timeout)
     fault="matching.outbox.after_claim:exit"
     target_svc="matching"
     check_halfstate() {
-      echo "  matching outbox (expect >=1 claimed-but-unpublished):"
-      psql postgres://postgres:postgres@matching-db:5432/matching_db -tAc \
-        "SELECT count(*) FROM outbox WHERE retrieved_at IS NOT NULL AND published_at IS NULL;" \
-        | xargs -I{} echo "    unpublished-but-claimed: {}"
-      echo "  ride.accepted stream (expect 0, nothing published yet):"
-      redis-cli -h redis XLEN ride.accepted | xargs -I{} echo "    length: {}"
+      stuck_ride=$(psql "$MATCHING_DB" -tAc \
+        "SELECT ride_id FROM outbox WHERE stream='ride.accepted' AND retrieved_at IS NOT NULL AND published_at IS NULL ORDER BY id DESC LIMIT 1")
+      [[ -z "$stuck_ride" ]] && { echo "  FAIL: no stuck matching outbox row"; return 1; }
+      echo "  captured rideID: $stuck_ride"
+      echo "  ride.accepted stream length (expect 0, nothing published yet): $(redis-cli $REDIS XLEN ride.accepted)"
     }
-    # After claim timeout, matching reclaims and publishes. Ride then consumes normally.
-    expect_log="Successfully processed"
-    expect_in="ride"
+    check_recovery() {
+      local published dedup pel
+      published=$(psql "$MATCHING_DB" -tAc "SELECT count(*) FROM outbox WHERE ride_id='$stuck_ride' AND published_at IS NOT NULL")
+      dedup=$(psql "$RIDE_DB" -tAc "SELECT count(*) FROM deduplication WHERE ride_id='$stuck_ride' AND stream='ride.accepted'")
+      pel=$(redis-cli $REDIS XPENDING ride.accepted ride-group | head -1)
+      echo "  stuck row published: $published (want 1)"
+      echo "  ride dedup entries:  $dedup (want 1)"
+      echo "  ride-group PEL:      $pel (want 0)"
+      [[ "$published" == "1" && "$dedup" == "1" && "$pel" == "0" ]]
+    }
     ;;
 
   ride-claim-timeout)
     fault="ride.outbox.after_claim:exit"
     target_svc="ride"
     check_halfstate() {
-      echo "  ride outbox (expect >=1 claimed-but-unpublished):"
-      psql postgres://postgres:postgres@ride-db:5432/ride_db -tAc \
-        "SELECT count(*) FROM outbox WHERE retrieved_at IS NOT NULL AND published_at IS NULL;" \
-        | xargs -I{} echo "    unpublished-but-claimed: {}"
-      echo "  ride.requested stream (expect 0, nothing published yet):"
-      redis-cli -h redis XLEN ride.requested | xargs -I{} echo "    length: {}"
+      stuck_ride=$(psql "$RIDE_DB" -tAc \
+        "SELECT ride_id FROM outbox WHERE stream='ride.requested' AND retrieved_at IS NOT NULL AND published_at IS NULL ORDER BY id DESC LIMIT 1")
+      [[ -z "$stuck_ride" ]] && { echo "  FAIL: no stuck ride outbox row"; return 1; }
+      echo "  captured rideID: $stuck_ride"
+      echo "  ride.requested stream length (expect 0): $(redis-cli $REDIS XLEN ride.requested)"
     }
-    expect_log="Driver .* accepted ride"
-    expect_in="matching"
+    check_recovery() {
+      local published dedup pel
+      published=$(psql "$RIDE_DB" -tAc "SELECT count(*) FROM outbox WHERE ride_id='$stuck_ride' AND published_at IS NOT NULL")
+      dedup=$(psql "$MATCHING_DB" -tAc "SELECT count(*) FROM deduplication WHERE ride_id='$stuck_ride' AND stream='ride.requested'")
+      pel=$(redis-cli $REDIS XPENDING ride.requested matching-group | head -1)
+      echo "  stuck row published:  $published (want 1)"
+      echo "  matching dedup:       $dedup (want 1)"
+      echo "  matching-group PEL:   $pel (want 0)"
+      [[ "$published" == "1" && "$dedup" == "1" && "$pel" == "0" ]]
+    }
     ;;
 
   matching-pel-recovery)
     fault="matching.trydriver.after_commit:exit"
     target_svc="matching"
     check_halfstate() {
-      echo "  matching dedup (expect >=1, proves tx committed before crash):"
-      psql postgres://postgres:postgres@matching-db:5432/matching_db -tAc \
-        "SELECT count(*) FROM deduplication WHERE stream = 'ride.requested';" \
-        | xargs -I{} echo "    entries: {}"
-      echo "  matching drivers busy (expect >=1):"
-      psql postgres://postgres:postgres@matching-db:5432/matching_db -tAc \
-        "SELECT count(*) FROM driver WHERE status = 'busy';" \
-        | xargs -I{} echo "    busy: {}"
-      echo "  ride.requested PEL (expect >=1 unacked):"
-      redis-cli -h redis XPENDING ride.requested matching-group \
-        | head -1 | xargs -I{} echo "    {}"
+      stuck_ride=$(psql "$MATCHING_DB" -tAc \
+        "SELECT ride_id FROM deduplication WHERE stream='ride.requested' ORDER BY id DESC LIMIT 1")
+      [[ -z "$stuck_ride" ]] && { echo "  FAIL: no matching dedup entry — tx didn't commit before crash"; return 1; }
+      echo "  captured rideID: $stuck_ride"
+      local pel busy
+      pel=$(redis-cli $REDIS XPENDING ride.requested matching-group | head -1)
+      busy=$(psql "$MATCHING_DB" -tAc "SELECT count(*) FROM driver WHERE status='busy'")
+      echo "  ride.requested PEL (expect >=1 unacked): $pel"
+      echo "  drivers busy (expect >=1):               $busy"
     }
-    expect_log="duplicate ride"
-    expect_in="matching"
+    check_recovery() {
+      local dedup pel accepted_published
+      dedup=$(psql "$MATCHING_DB" -tAc "SELECT count(*) FROM deduplication WHERE ride_id='$stuck_ride' AND stream='ride.requested'")
+      pel=$(redis-cli $REDIS XPENDING ride.requested matching-group | head -1)
+      accepted_published=$(psql "$MATCHING_DB" -tAc "SELECT count(*) FROM outbox WHERE ride_id='$stuck_ride' AND stream='ride.accepted' AND published_at IS NOT NULL")
+      echo "  matching dedup:            $dedup (want 1)"
+      echo "  matching-group PEL:        $pel (want 0)"
+      echo "  ride.accepted published:   $accepted_published (want 1)"
+      [[ "$dedup" == "1" && "$pel" == "0" && "$accepted_published" == "1" ]]
+    }
     ;;
 
   ride-accepted-rollback)
     fault="ride.accepted.before_commit:panic"
     target_svc="ride"
     check_halfstate() {
-      echo "  ride dedup (expect 0, proves rollback worked):"
-      psql postgres://postgres:postgres@ride-db:5432/ride_db -tAc \
-        "SELECT count(*) FROM deduplication WHERE stream = 'ride.accepted';" \
-        | xargs -I{} echo "    entries: {}"
-      echo "  ride.accepted PEL (expect >=1 unacked):"
-      redis-cli -h redis XPENDING ride.accepted ride-group \
-        | head -1 | xargs -I{} echo "    {}"
+      # Tx rolled back, so no ride-side dedup yet. Find rideID via matching's outbox.
+      stuck_ride=$(psql "$MATCHING_DB" -tAc \
+        "SELECT ride_id FROM outbox WHERE stream='ride.accepted' AND published_at IS NOT NULL ORDER BY id DESC LIMIT 1")
+      [[ -z "$stuck_ride" ]] && { echo "  FAIL: no published ride.accepted event found"; return 1; }
+      echo "  captured rideID: $stuck_ride"
+      local dedup pel
+      dedup=$(psql "$RIDE_DB" -tAc "SELECT count(*) FROM deduplication WHERE ride_id='$stuck_ride' AND stream='ride.accepted'")
+      pel=$(redis-cli $REDIS XPENDING ride.accepted ride-group | head -1)
+      echo "  ride dedup (expect 0, proves rollback): $dedup"
+      echo "  ride-group PEL (expect >=1 unacked):    $pel"
     }
-    expect_log="Successfully processed"
-    expect_in="ride"
+    check_recovery() {
+      local dedup pel ride_status
+      dedup=$(psql "$RIDE_DB" -tAc "SELECT count(*) FROM deduplication WHERE ride_id='$stuck_ride' AND stream='ride.accepted'")
+      pel=$(redis-cli $REDIS XPENDING ride.accepted ride-group | head -1)
+      ride_status=$(psql "$RIDE_DB" -tAc "SELECT ride_status FROM ride WHERE id='$stuck_ride'")
+      echo "  ride dedup:      $dedup (want 1)"
+      echo "  ride-group PEL:  $pel (want 0)"
+      echo "  ride status:     $ride_status (want accepted)"
+      [[ "$dedup" == "1" && "$pel" == "0" && "$ride_status" == "accepted" ]]
+    }
     ;;
 
   ride-request-retry)
     fault="ride.request.after_commit:exit"
     target_svc="ride"
     check_halfstate() {
-      echo "  rides table (expect exactly 1, from the pre-crash commit):"
-      psql postgres://postgres:postgres@ride-db:5432/ride_db -tAc \
-        "SELECT count(*) FROM ride;" \
-        | xargs -I{} echo "    count: {}"
-    }
-    check_postrecovery() {
+      stuck_ride=$(psql "$RIDE_DB" -tAc "SELECT id FROM ride ORDER BY requested_at DESC LIMIT 1")
+      [[ -z "$stuck_ride" ]] && { echo "  FAIL: no ride row found"; return 1; }
+      echo "  captured rideID: $stuck_ride"
       local count
-      count=$(psql postgres://postgres:postgres@ride-db:5432/ride_db -tAc "SELECT count(*) FROM ride;")
-      if [[ "$count" == "1" ]]; then
-        echo "  PASS: exactly 1 ride after retry (idempotency working)"
-        return 0
-      else
-        echo "  FAIL: expected 1 ride, got $count (duplicate created on retry)"
-        return 1
-      fi
+      count=$(psql "$RIDE_DB" -tAc "SELECT count(*) FROM ride")
+      echo "  ride count (expect 1, from the pre-crash commit): $count"
     }
-    # NOTE: update this to whatever line your RequestRide logs on idempotent replay.
-    expect_log="ride already requested with ID"
-    expect_in="ride"
+    check_recovery() {
+      local count
+      count=$(psql "$RIDE_DB" -tAc "SELECT count(*) FROM ride")
+      echo "  ride count: $count (want 1)"
+      [[ "$count" == "1" ]]
+    }
     ;;
 
   *)
     echo "usage: $0 <scenario>" >&2
     echo >&2
     echo "scenarios:" >&2
-    echo "  matching-ghost-message          matching crashes after XAdd on ride.accepted" >&2
-    echo "  ride-ghost-message     ride crashes after XAdd on ride.requested" >&2
-    echo "  matching-claim-timeout matching crashes after claim, before XAdd" >&2
+    echo "  matching-ghost-message    matching crashes after XAdd on ride.accepted" >&2
+    echo "  ride-ghost-message        ride crashes after XAdd on ride.requested" >&2
+    echo "  matching-claim-timeout    matching crashes after claim, before XAdd" >&2
     echo "  ride-claim-timeout        ride crashes after claim, before XAdd" >&2
-    echo "  matching-pel-recovery   matching crashes after tryDriver commit" >&2
-    echo "  ride-accepted-rollback      ride panics inside accepted-handler tx" >&2
+    echo "  matching-pel-recovery     matching crashes after tryDriver commit" >&2
+    echo "  ride-accepted-rollback    ride panics inside accepted-handler tx" >&2
     echo "  ride-request-retry        ride crashes after RequestRide commit; verifies idempotency" >&2
     exit 1
     ;;
@@ -163,60 +208,40 @@ echo "STEP 0: Resetting state..."
 "$(dirname "$0")/resetstate.sh"
 
 echo
-echo "STEP 1: In the $target_svc service terminal, Ctrl-C the current process"
-echo "and run:"
+echo "STEP 1: In the $target_svc terminal, Ctrl-C and run:"
 echo
-echo "    FAULT_INJECT=\"$fault\" go run . 2>&1 | tee -a /tmp/${target_svc}-service.log"
+echo "    FAULT_INJECT=\"$fault\" go run ."
 echo
-read -rp "Press Enter once the service has crashed with 'os.Exit(1)' or a panic... "
+read -rp "Press Enter once the service has crashed... "
 
 echo
-echo "STEP 2: Checking half-state before recovery..."
-check_halfstate
+echo "STEP 2: Capturing half-state..."
+if ! check_halfstate; then
+  echo
+  echo "half-state check failed — aborting. The fault may not have fired, or"
+  echo "the reset may not have cleared state properly."
+  exit 1
+fi
 
 echo
-echo "STEP 3: In the $target_svc terminal, restart it cleanly:"
+echo "STEP 3: In the $target_svc terminal, restart cleanly:"
 echo
-echo "    go run . 2>&1 | tee -a /tmp/${target_svc}-service.log"
+echo "    go run ."
 echo
 read -rp "Press Enter once it's running again... "
 
 echo
-echo "STEP 4: Waiting 30 seconds for recovery (claim timeout is 15s)..."
+echo "STEP 4: Waiting 30 seconds for recovery..."
 sleep 30
 
 echo
-echo "STEP 5: Verifying recovery..."
-log_file="/tmp/${expect_in}-service.log"
-if [[ ! -f "$log_file" ]]; then
-  echo "  SKIP: $log_file not found."
-  echo "  Make sure you started the $expect_in service with:"
-  echo "    go run . 2>&1 | tee /tmp/${expect_in}-service.log"
-  exit 1
-fi
-
-log_pass=0
-if tail -500 "$log_file" | grep -qE "$expect_log"; then
-  echo "  PASS: found '$expect_log' in $expect_in service log"
-  log_pass=1
-else
-  echo "  FAIL: did not find '$expect_log' in $expect_in service log"
-  echo "  last 20 lines of $log_file:"
-  tail -20 "$log_file" | sed 's/^/    /'
-fi
-
-# Optional per-scenario post-recovery invariant checks.
-postrecovery_pass=1
-if declare -f check_postrecovery > /dev/null; then
+echo "STEP 5: Verifying recovery state..."
+if check_recovery; then
   echo
-  echo "  post-recovery checks:"
-  if ! check_postrecovery; then
-    postrecovery_pass=0
-  fi
-fi
-
-if [[ $log_pass -eq 1 && $postrecovery_pass -eq 1 ]]; then
+  echo "PASS"
   exit 0
 else
+  echo
+  echo "FAIL"
   exit 1
 fi
