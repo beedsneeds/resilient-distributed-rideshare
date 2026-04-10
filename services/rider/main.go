@@ -70,7 +70,7 @@ func main() {
 
 	queries := riderdata.New(pgxpool)
 
-	for i := 1; i <= 8; i++ {
+	for {
 		time.Sleep(time.Duration(2) * time.Second)
 
 		rider, err := queries.GetRandomAvailableRider(context.Background())

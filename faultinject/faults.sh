@@ -2,7 +2,7 @@
 #
 # Prereqs: ride, matching, rider and reconciler services running in separate terminals.
 # Workflow per scenario:
-#   0. reset state (calls resetstate.sh)
+#   0. Optional reset state
 #   1. prompt you to restart the target service with FAULT_INJECT armed
 #   2. check half-state in postgres + redis immediately after crash
 #         Each scenario's check_halfstate captures the target rideID during the crash window
@@ -19,6 +19,21 @@ REDIS="-h redis"
 
 # stuck_ride is populated by check_halfstate and consumed by check_recovery.
 stuck_ride=""
+
+# pel_for_ride <stream> <group> <ride_id>
+# Counts pending entries on <stream>/<group> whose rideID field matches <ride_id>.
+# Filtering by rideID avoids false failures when an unrelated ride happens to be
+# sitting in the PEL from a prior scenario or a concurrent request.
+pel_for_ride() {
+  local stream=$1 group=$2 ride=$3 count=0 sid rid
+  while read -r sid _; do
+    [[ -z "$sid" ]] && continue
+    rid=$(redis-cli $REDIS XRANGE "$stream" "$sid" "$sid" \
+          | awk '/^rideID$/{getline; print; exit}')
+    [[ "$rid" == "$ride" ]] && count=$((count+1))
+  done < <(redis-cli $REDIS XPENDING "$stream" "$group" - + 100 | awk '{print $1}')
+  echo "$count"
+}
 
 scenario="${1:-}"
 
@@ -37,10 +52,10 @@ case "$scenario" in
       local published dedup pel
       published=$(psql "$MATCHING_DB" -tAc "SELECT count(*) FROM outbox WHERE ride_id='$stuck_ride' AND published_at IS NOT NULL")
       dedup=$(psql "$RIDE_DB" -tAc "SELECT count(*) FROM deduplication WHERE ride_id='$stuck_ride' AND stream='ride.accepted'")
-      pel=$(redis-cli $REDIS XPENDING ride.accepted ride-group | head -1)
-      echo "  stuck row published: $published (want 1)"
-      echo "  ride dedup entries:  $dedup (want 1)"
-      echo "  ride-group PEL:      $pel (want 0)"
+      pel=$(pel_for_ride ride.accepted ride-group "$stuck_ride")
+      echo "  stuck row published:          $published (want 1)"
+      echo "  ride dedup entries:           $dedup (want 1)"
+      echo "  ride-group PEL for stuck ride: $pel (want 0)"
       [[ "$published" == "1" && "$dedup" == "1" && "$pel" == "0" ]]
     }
     ;;
@@ -59,10 +74,10 @@ case "$scenario" in
       local published dedup pel
       published=$(psql "$RIDE_DB" -tAc "SELECT count(*) FROM outbox WHERE ride_id='$stuck_ride' AND published_at IS NOT NULL")
       dedup=$(psql "$MATCHING_DB" -tAc "SELECT count(*) FROM deduplication WHERE ride_id='$stuck_ride' AND stream='ride.requested'")
-      pel=$(redis-cli $REDIS XPENDING ride.requested matching-group | head -1)
-      echo "  stuck row published:  $published (want 1)"
-      echo "  matching dedup:       $dedup (want 1)"
-      echo "  matching-group PEL:   $pel (want 0)"
+      pel=$(pel_for_ride ride.requested matching-group "$stuck_ride")
+      echo "  stuck row published:              $published (want 1)"
+      echo "  matching dedup:                   $dedup (want 1)"
+      echo "  matching-group PEL for stuck ride: $pel (want 0)"
       [[ "$published" == "1" && "$dedup" == "1" && "$pel" == "0" ]]
     }
     ;;
@@ -81,10 +96,10 @@ case "$scenario" in
       local published dedup pel
       published=$(psql "$MATCHING_DB" -tAc "SELECT count(*) FROM outbox WHERE ride_id='$stuck_ride' AND published_at IS NOT NULL")
       dedup=$(psql "$RIDE_DB" -tAc "SELECT count(*) FROM deduplication WHERE ride_id='$stuck_ride' AND stream='ride.accepted'")
-      pel=$(redis-cli $REDIS XPENDING ride.accepted ride-group | head -1)
-      echo "  stuck row published: $published (want 1)"
-      echo "  ride dedup entries:  $dedup (want 1)"
-      echo "  ride-group PEL:      $pel (want 0)"
+      pel=$(pel_for_ride ride.accepted ride-group "$stuck_ride")
+      echo "  stuck row published:          $published (want 1)"
+      echo "  ride dedup entries:           $dedup (want 1)"
+      echo "  ride-group PEL for stuck ride: $pel (want 0)"
       [[ "$published" == "1" && "$dedup" == "1" && "$pel" == "0" ]]
     }
     ;;
@@ -103,10 +118,10 @@ case "$scenario" in
       local published dedup pel
       published=$(psql "$RIDE_DB" -tAc "SELECT count(*) FROM outbox WHERE ride_id='$stuck_ride' AND published_at IS NOT NULL")
       dedup=$(psql "$MATCHING_DB" -tAc "SELECT count(*) FROM deduplication WHERE ride_id='$stuck_ride' AND stream='ride.requested'")
-      pel=$(redis-cli $REDIS XPENDING ride.requested matching-group | head -1)
-      echo "  stuck row published:  $published (want 1)"
-      echo "  matching dedup:       $dedup (want 1)"
-      echo "  matching-group PEL:   $pel (want 0)"
+      pel=$(pel_for_ride ride.requested matching-group "$stuck_ride")
+      echo "  stuck row published:              $published (want 1)"
+      echo "  matching dedup:                   $dedup (want 1)"
+      echo "  matching-group PEL for stuck ride: $pel (want 0)"
       [[ "$published" == "1" && "$dedup" == "1" && "$pel" == "0" ]]
     }
     ;;
@@ -128,11 +143,11 @@ case "$scenario" in
     check_recovery() {
       local dedup pel accepted_published
       dedup=$(psql "$MATCHING_DB" -tAc "SELECT count(*) FROM deduplication WHERE ride_id='$stuck_ride' AND stream='ride.requested'")
-      pel=$(redis-cli $REDIS XPENDING ride.requested matching-group | head -1)
+      pel=$(pel_for_ride ride.requested matching-group "$stuck_ride")
       accepted_published=$(psql "$MATCHING_DB" -tAc "SELECT count(*) FROM outbox WHERE ride_id='$stuck_ride' AND stream='ride.accepted' AND published_at IS NOT NULL")
-      echo "  matching dedup:            $dedup (want 1)"
-      echo "  matching-group PEL:        $pel (want 0)"
-      echo "  ride.accepted published:   $accepted_published (want 1)"
+      echo "  matching dedup:                    $dedup (want 1)"
+      echo "  matching-group PEL for stuck ride: $pel (want 0)"
+      echo "  ride.accepted published:           $accepted_published (want 1)"
       [[ "$dedup" == "1" && "$pel" == "0" && "$accepted_published" == "1" ]]
     }
     ;;
@@ -155,11 +170,11 @@ case "$scenario" in
     check_recovery() {
       local dedup pel ride_status
       dedup=$(psql "$RIDE_DB" -tAc "SELECT count(*) FROM deduplication WHERE ride_id='$stuck_ride' AND stream='ride.accepted'")
-      pel=$(redis-cli $REDIS XPENDING ride.accepted ride-group | head -1)
+      pel=$(pel_for_ride ride.accepted ride-group "$stuck_ride")
       ride_status=$(psql "$RIDE_DB" -tAc "SELECT ride_status FROM ride WHERE id='$stuck_ride'")
-      echo "  ride dedup:      $dedup (want 1)"
-      echo "  ride-group PEL:  $pel (want 0)"
-      echo "  ride status:     $ride_status (want accepted)"
+      echo "  ride dedup:                    $dedup (want 1)"
+      echo "  ride-group PEL for stuck ride: $pel (want 0)"
+      echo "  ride status:                   $ride_status (want accepted)"
       [[ "$dedup" == "1" && "$pel" == "0" && "$ride_status" == "accepted" ]]
     }
     ;;
@@ -204,9 +219,6 @@ echo "fault:  $fault"
 echo "target: $target_svc service"
 echo
 
-echo "STEP 0: Resetting state..."
-"$(dirname "$0")/resetstate.sh"
-
 echo
 echo "STEP 1: In the $target_svc terminal, Ctrl-C and run:"
 echo
@@ -218,8 +230,7 @@ echo
 echo "STEP 2: Capturing half-state..."
 if ! check_halfstate; then
   echo
-  echo "half-state check failed — aborting. The fault may not have fired, or"
-  echo "the reset may not have cleared state properly."
+  echo "half-state check failed — aborting. The fault may not have fired"
   exit 1
 fi
 
@@ -239,9 +250,12 @@ echo "STEP 5: Verifying recovery state..."
 if check_recovery; then
   echo
   echo "PASS"
+  echo "Optional: Reset state with ./faultinject/resetstate.sh"
   exit 0
 else
   echo
   echo "FAIL"
+  echo "Optional: Reset state with ./faultinject/resetstate.sh"
   exit 1
 fi
+
