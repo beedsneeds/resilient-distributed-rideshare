@@ -11,9 +11,9 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 USER vscode
 
 RUN go env -w GOPROXY=https://proxy.golang.org,direct \
-    && go install google.golang.org/protobuf/cmd/protoc-gen-go@latest \
-    && go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest \
-    && go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest \
+    && go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12 \
+    && go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2 \
+    && go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 \
     && chmod -R g+w /go/pkg/mod/cache
 
 ENV PATH="$PATH:/home/vscode/go/bin"

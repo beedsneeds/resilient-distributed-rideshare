@@ -34,20 +34,36 @@ var retryPolicy = `{
 }`
 
 func requestRide(client ridepb.RideServiceClient, riderID string) (*ridepb.RequestRideResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	const maxAttempts = 8
+	const maxBackoff = 5 * time.Second
 
 	idempotencyKey := uuid.New().String()
 
-	ride, err := client.RequestRide(ctx, &ridepb.RequestRideRequest{
-		// TODO implement actual idempotency with redis
-		IdempotencyKey: &idempotencyKey,
-		RiderId:        &riderID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("RequestRide failed: %w", err)
+	// retry loop that's separate from gRPC's retries. Designed to outlast a process failure+restart
+	// Keep retrying for ~30s
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ride, err := client.RequestRide(ctx, &ridepb.RequestRideRequest{
+			IdempotencyKey: &idempotencyKey,
+			RiderId:        &riderID,
+		})
+		cancel() // No stacking of defers
+		if err == nil {
+			return ride, nil
+		}
+		lastErr = err
+		if attempt < maxAttempts {
+			backoff := time.Duration(attempt) * 2 * time.Second
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			log.Printf("RequestRide attempt %d/%d failed, retrying with idempotency key %s: %v",
+				attempt, maxAttempts, idempotencyKey, err)
+			time.Sleep(backoff)
+		}
 	}
-	return ride, nil
+	return nil, fmt.Errorf("RequestRide failed after %d attempts: %w", maxAttempts, lastErr)
 }
 
 func main() {
@@ -97,6 +113,6 @@ func main() {
 			continue
 		}
 		fmt.Printf("Rider: %v\n", rider)
-		fmt.Printf("Ride ID: %v\n", ride.Ride.Id)
+		fmt.Printf("Ride ID: %v\n", ride.Ride.GetId())
 	}
 }

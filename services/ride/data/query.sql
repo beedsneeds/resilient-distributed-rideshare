@@ -71,7 +71,7 @@ INSERT INTO requestDedup (
     $1
 ) ON CONFLICT (
     idempKey
-) DO UPDATE 
+) DO UPDATE
 SET idempKey = EXCLUDED.idempKey
 RETURNING ride_id;
 

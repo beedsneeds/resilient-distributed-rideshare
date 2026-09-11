@@ -17,8 +17,9 @@ MATCHING_DB="postgres://postgres:postgres@matching-db:5432/matching_db"
 RIDE_DB="postgres://postgres:postgres@ride-db:5432/ride_db"
 REDIS="-h redis"
 
-# stuck_ride is populated by check_halfstate and consumed by check_recovery.
+# stuck_ride/stuck_key are populated by check_halfstate and consumed by check_recovery.
 stuck_ride=""
+stuck_key=""
 
 # pel_for_ride <stream> <group> <ride_id>
 # Counts pending entries on <stream>/<group> whose rideID field matches <ride_id>.
@@ -185,16 +186,21 @@ case "$scenario" in
     check_halfstate() {
       stuck_ride=$(psql "$RIDE_DB" -tAc "SELECT id FROM ride ORDER BY requested_at DESC LIMIT 1")
       [[ -z "$stuck_ride" ]] && { echo "  FAIL: no ride row found"; return 1; }
+      stuck_key=$(psql "$RIDE_DB" -tAc "SELECT idempKey FROM requestDedup WHERE ride_id = '$stuck_ride'")
+      [[ -z "$stuck_key" ]] && { echo "  FAIL: no idempotency key mapped to $stuck_ride"; return 1; }
       echo "  captured rideID: $stuck_ride"
-      local count
-      count=$(psql "$RIDE_DB" -tAc "SELECT count(*) FROM ride")
-      echo "  ride count (expect 1, from the pre-crash commit): $count"
+      echo "  captured idempotency key: $stuck_key"
     }
     check_recovery() {
-      local count
-      count=$(psql "$RIDE_DB" -tAc "SELECT count(*) FROM ride")
-      echo "  ride count: $count (want 1)"
-      [[ "$count" == "1" ]]
+      local rides_for_key orphans
+      rides_for_key=$(psql "$RIDE_DB" -tAc \
+        "SELECT count(*) FROM ride r JOIN requestDedup d ON d.ride_id = r.id WHERE d.idempKey = '$stuck_key'")
+      # no ride may exist that wasn't created through an idempotency key
+      orphans=$(psql "$RIDE_DB" -tAc \
+        "SELECT count(*) FROM ride WHERE id NOT IN (SELECT ride_id FROM requestDedup WHERE ride_id IS NOT NULL)")
+      echo "  rides for captured key: $rides_for_key (want 1)"
+      echo "  rides with no idemp key: $orphans (want 0)"
+      [[ "$rides_for_key" == "1" && "$orphans" == "0" ]]
     }
     ;;
 
