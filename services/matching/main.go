@@ -17,6 +17,7 @@ import (
 
 	"github.com/beedsneeds/resilient-distributed-rideshare/faultinject"
 	matchingdata "github.com/beedsneeds/resilient-distributed-rideshare/services/matching/data"
+	"github.com/beedsneeds/resilient-distributed-rideshare/streaming"
 	"github.com/go-redsync/redsync/v4"
 	"github.com/go-redsync/redsync/v4/redis/goredis/v9"
 	"github.com/google/uuid"
@@ -161,57 +162,14 @@ func matchDriver(ctx context.Context, s matchingServiceServer, rideID uuid.UUID)
 }
 
 func processRideRequests(ctx context.Context, s matchingServiceServer, consumer string) error {
-	checkBacklog := true
-	lastID := "0"
-	const consgroup = "matching-group"
-
-	// Only create streams that will be consumed here
-	err := s.messages.XGroupCreateMkStream(ctx, "ride.requested", consgroup, "0").Err()
-	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
-		return fmt.Errorf("XGroupCreateMkStream: %v", err)
-	}
-
-	for {
-		if ctx.Err() != nil {
-			log.Printf("context error propagated")
-			return ctx.Err()
-		}
-		var currID string
-		if checkBacklog {
-			currID = lastID
-		} else {
-			currID = ">"
-		}
-
-		streams, err := s.messages.XReadGroup(ctx, &redis.XReadGroupArgs{
-			Group:    consgroup,
-			Consumer: consumer,
-			Streams:  []string{"ride.requested", currID},
-			Count:    1,
-			Block:    5 * time.Second,
-		}).Result()
-		if err == redis.Nil {
-			// block timed out, no messages
-			log.Printf("[%s] [ride.requested] No new messages \n", time.Now().Format("15:04:05"))
-			continue
-		}
+	const stream, consgroup = "ride.requested", "matching-group"
+	return streaming.Process(ctx, s.messages, stream, consgroup, consumer, func(ctx context.Context, message redis.XMessage) error {
+		rideID, err := streaming.UUIDField(message, "rideID")
 		if err != nil {
-			log.Printf("XRead error: %v", err)
-			continue
+			log.Printf("[%s] DROPPING %s: %v", stream, message.ID, err)
+			return nil // nil acks it
 		}
-		if len(streams[0].Messages) == 0 {
-			// Start processesing new messages
-			checkBacklog = false
-			log.Printf("finished backlog")
-			continue
-		}
-		message := streams[0].Messages[0]
 
-		rideID, err := uuid.Parse(message.Values["rideID"].(string))
-		if err != nil {
-			log.Printf("invalid rideID UUID %s: %v", rideID, err)
-			continue
-		}
 		// Deduplicate messages once cheaply before matchDriver does, so we don't have to acquire locks and open transactions
 		// This is just an optimization, not a dedup guarantee
 		_, err = s.queries.CheckDedupEntry(ctx, matchingdata.CheckDedupEntryParams{
@@ -221,45 +179,28 @@ func processRideRequests(ctx context.Context, s matchingServiceServer, consumer 
 		if err == nil {
 			// Ack and skip this message since duplicate entry found. Fresh entries get a pgx.ErrNoRows
 			log.Printf("duplicate ride %s, skipping", rideID)
-			if err := s.messages.XAck(ctx, "ride.requested", consgroup, message.ID).Err(); err != nil {
-				log.Printf("XAck failed for message %s: %v", message.ID, err)
-			}
-			continue
+			return nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
-			log.Printf("Deduplication table error: %v", err)
-			checkBacklog = true
-			continue
+			return fmt.Errorf("Deduplication table error: %v", err)
 		}
 
 		// Match driver currently doesn't use rideID but it ideally takes rider location while matching
 		_, err = matchDriver(ctx, s, rideID)
 		if err != nil {
 			if errors.Is(err, errAlreadyMatched) {
-				if err := s.messages.XAck(ctx, "ride.requested", consgroup, message.ID).Err(); err != nil {
-					log.Printf("XAck failed for message %s: %v", message.ID, err)
-				}
-				lastID = message.ID
-				continue
-			} else if err.Error() == "Could not match" {
-				// Switch back to backlog mode so the failed message (now in PEL) is retried on the next iteration instead of being skipped by ">".
-				checkBacklog = true
-				continue
-			} else {
+				return nil
+			}
+			if err.Error() == "Could not match" {
+				// Retry through backlog once more drivers open up
 				return err
 			}
+			return fmt.Errorf("%w: %v", streaming.ErrFatal, err)
 		}
 
-		// log.Printf("Driver %v accepted ride with ID %v \n", driver, rideID)
-
-		if err := s.messages.XAck(ctx, "ride.requested", consgroup, message.ID).Err(); err != nil {
-			log.Printf("XAck failed for message %s: %v", message.ID, err)
-		} else {
-			// This log message is grepped in faults.sh
-			log.Printf("[ride.requested] Successfully processed message %s (rideID: %s) \n", message.ID, rideID)
-		}
-		lastID = message.ID
-	}
+		log.Printf("[%s] Successfully matched message %s (rideID: %s) \n", stream, message.ID, rideID)
+		return nil
+	})
 }
 
 func publishOutboxEvents(ctx context.Context, s matchingServiceServer) error {
