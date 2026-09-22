@@ -34,7 +34,7 @@ Supported Failure Scenarios:
 - ride-accepted-rollback
 - ride-request-retry
 
-Optional: Reset state between runs with `./faultinject/resetstate.sh`
+Don't forget to reset state between runs with `./faultinject/resetstate.sh`
 
 Troubleshooting: If the services do not recover, reset db state and try again. If that doesn't work, let me know
 

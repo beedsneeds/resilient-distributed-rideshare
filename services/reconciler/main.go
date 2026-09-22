@@ -11,6 +11,7 @@ import (
 	"time"
 
 	matchingdata "github.com/beedsneeds/resilient-distributed-rideshare/services/matching/data"
+	"github.com/beedsneeds/resilient-distributed-rideshare/services/matching/events"
 	ridedata "github.com/beedsneeds/resilient-distributed-rideshare/services/ride/data"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -122,10 +123,22 @@ func (r *reconciler) checkOrphanedRequestedRides(ctx context.Context) {
 
 		// Case 4:
 		if event, ok := unpublishedMatchingEventSet[ride.ID]; ok {
+			if event.Payload == nil {
+				log.Printf("RECONCILE: outbox event %s has no payload, skipping", event.ID.String())
+				continue
+			}
+			p, err := events.UnmarshalRideAcceptedPayload(event.Payload)
+			if err != nil {
+				log.Printf("RECONCILE: failed to unmarshal outbox payload: %v", err)
+				continue
+			}
 			err = r.messages.XAdd(ctx, &redis.XAddArgs{
 				Stream: string(event.Stream),
 				ID:     "*",
-				Values: []string{"rideID", event.RideID.String()},
+				Values: []string{
+					"rideID", event.RideID.String(),
+					"driverID", p.DriverID,
+				},
 			}).Err()
 			if err != nil {
 				log.Printf("RECONCILE: XAdd failed: %v", err)

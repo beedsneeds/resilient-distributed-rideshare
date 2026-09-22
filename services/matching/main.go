@@ -11,12 +11,11 @@ import (
 
 	"net"
 
-	"encoding/json"
-
 	"golang.org/x/sync/errgroup"
 
 	"github.com/beedsneeds/resilient-distributed-rideshare/faultinject"
 	matchingdata "github.com/beedsneeds/resilient-distributed-rideshare/services/matching/data"
+	"github.com/beedsneeds/resilient-distributed-rideshare/services/matching/events"
 	"github.com/beedsneeds/resilient-distributed-rideshare/streaming"
 	"github.com/go-redsync/redsync/v4"
 	"github.com/go-redsync/redsync/v4/redis/goredis/v9"
@@ -55,7 +54,7 @@ var errTryNext = errors.New("try next driver")
 // errTryNext if this driver couldn't be used (try the next one),
 // or a real error if something unrecoverable happened.
 func tryDriver(s matchingServiceServer, ctx context.Context, rideID uuid.UUID, driver matchingdata.Driver) (matchingdata.Driver, error) {
-	payload, err := json.Marshal(map[string]string{"driverID": driver.ID.String()})
+	payload, err := events.RideAcceptedPayload{DriverID: driver.ID.String()}.Marshal()
 	if err != nil {
 		return matchingdata.Driver{}, fmt.Errorf("marshal payload: %v", err)
 	}
@@ -215,14 +214,12 @@ func publishOutboxEvents(ctx context.Context, s matchingServiceServer) error {
 			return fmt.Errorf("Query GetOutboxRow failed: %v", err)
 		}
 
-		var p struct {
-			DriverID string `json:"driverID"`
-		}
 		if event.Payload == nil {
 			log.Printf("WARNING: No payload where expected")
 			continue
 		}
-		if err := json.Unmarshal(event.Payload, &p); err != nil {
+		p, err := events.UnmarshalRideAcceptedPayload(event.Payload)
+		if err != nil {
 			log.Printf("failed to unmarshal outbox payload: %v", err)
 			continue
 		}

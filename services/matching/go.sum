@@ -2,6 +2,8 @@ github.com/beedsneeds/resilient-distributed-rideshare/faultinject v0.0.0-2026040
 github.com/beedsneeds/resilient-distributed-rideshare/faultinject v0.0.0-20260405200737-f28242bb75f1/go.mod h1:/2EDnbCLb0EjgwTz0wbvRCAHm3h/T70/4nSYVbUwfQI=
 github.com/beedsneeds/resilient-distributed-rideshare/proto v0.0.0-20260321163956-4e331d219b22 h1:Z17IFh/k2lJFHx/rdxYt3rtVTkqk/Z0MijxgOViaSd8=
 github.com/beedsneeds/resilient-distributed-rideshare/proto v0.0.0-20260321163956-4e331d219b22/go.mod h1:NqyY7r8MCSVC8KiV1K23cJdwg8lqixjjs2gj2iCyX9c=
+github.com/beedsneeds/resilient-distributed-rideshare/streaming v0.0.0-20260912043242-b2a6d56811a3 h1:T/LwWSxmqoWdOnscsrqskkCsrSjCmb3GkDxYDD+DciI=
+github.com/beedsneeds/resilient-distributed-rideshare/streaming v0.0.0-20260912043242-b2a6d56811a3/go.mod h1:M9YGupTv7+oGmuLHJ1+U6gaEeq9tGXQ3yNKFlAsc+2g=
 github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=
 github.com/bsm/ginkgo/v2 v2.12.0/go.mod h1:SwYbGRRDovPVboqFv0tPTcG1sN61LM1Z4ARdbAV9g4c=
 github.com/bsm/gomega v1.27.10 h1:yeMWxP2pV2fG3FgAODIY8EiRE3dy0aeFYt4l7wh6yKA=
