@@ -112,5 +112,5 @@ WHERE status = 'busy';
 -- name: GetUnpublishedOutboxEvents :many
 SELECT * FROM outbox
 WHERE ride_id = ANY(@ride_ids::uuid[])
-  AND stream = 'ride.requested'
+  AND stream = 'ride.accepted'
   AND published_at IS NULL;

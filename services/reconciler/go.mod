@@ -3,7 +3,7 @@ module github.com/beedsneeds/resilient-distributed-rideshare/services/reconciler
 go 1.25.8
 
 require (
-	github.com/beedsneeds/resilient-distributed-rideshare/services/matching v0.0.0-20260404012228-ced8cbd5f9d9
+	github.com/beedsneeds/resilient-distributed-rideshare/services/matching v0.0.0-20260922024044-380e57679913
 	github.com/beedsneeds/resilient-distributed-rideshare/services/ride v0.0.0-20260404012228-ced8cbd5f9d9
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/redis/go-redis/v9 v9.18.0

@@ -245,7 +245,7 @@ func (q *Queries) GetRandomAvailableDriver(ctx context.Context) (Driver, error) 
 const getUnpublishedOutboxEvents = `-- name: GetUnpublishedOutboxEvents :many
 SELECT id, ride_id, stream, payload, created_at, retrieved_at, published_at FROM outbox
 WHERE ride_id = ANY($1::uuid[])
-  AND stream = 'ride.requested'
+  AND stream = 'ride.accepted'
   AND published_at IS NULL
 `
 

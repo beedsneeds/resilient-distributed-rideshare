@@ -36,6 +36,12 @@ pel_for_ride() {
   echo "$count"
 }
 
+# Count entries on <stream> whose rideID field matches <ride_id>
+entries_for_ride() {
+  local stream=$1 ride=$2
+  redis-cli $REDIS XRANGE "$stream" - + | grep -cx "$ride" || true
+}
+
 scenario="${1:-}"
 
 case "$scenario" in
@@ -91,7 +97,7 @@ case "$scenario" in
         "SELECT ride_id FROM outbox WHERE stream='ride.accepted' AND retrieved_at IS NOT NULL AND published_at IS NULL ORDER BY id DESC LIMIT 1")
       [[ -z "$stuck_ride" ]] && { echo "  FAIL: no stuck matching outbox row"; return 1; }
       echo "  captured rideID: $stuck_ride"
-      echo "  ride.accepted stream length (expect 0, nothing published yet): $(redis-cli $REDIS XLEN ride.accepted)"
+      echo "  ride.accepted entries for this ride (expect 0, nothing published yet): $(entries_for_ride ride.accepted "$stuck_ride")"
     }
     check_recovery() {
       local published dedup pel
@@ -113,7 +119,7 @@ case "$scenario" in
         "SELECT ride_id FROM outbox WHERE stream='ride.requested' AND retrieved_at IS NOT NULL AND published_at IS NULL ORDER BY id DESC LIMIT 1")
       [[ -z "$stuck_ride" ]] && { echo "  FAIL: no stuck ride outbox row"; return 1; }
       echo "  captured rideID: $stuck_ride"
-      echo "  ride.requested stream length (expect 0): $(redis-cli $REDIS XLEN ride.requested)"
+      echo "  ride.requested entries for this ride (expect 0): $(entries_for_ride ride.requested "$stuck_ride")"
     }
     check_recovery() {
       local published dedup pel

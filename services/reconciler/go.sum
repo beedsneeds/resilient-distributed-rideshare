@@ -1,5 +1,5 @@
-github.com/beedsneeds/resilient-distributed-rideshare/services/matching v0.0.0-20260404012228-ced8cbd5f9d9 h1:+Zmo/F4gMg9frtTioqOHVXzXGn+MK4rideFwMQKMetM=
-github.com/beedsneeds/resilient-distributed-rideshare/services/matching v0.0.0-20260404012228-ced8cbd5f9d9/go.mod h1:33zgWT6lYNOMHzfcqHu+JxU0lDjGznhd+0CHAt3TBOo=
+github.com/beedsneeds/resilient-distributed-rideshare/services/matching v0.0.0-20260922024044-380e57679913 h1:jnOfCTYRYkJT6ySPfa87pYIVsJdaw9JYSbYCGnEW9rA=
+github.com/beedsneeds/resilient-distributed-rideshare/services/matching v0.0.0-20260922024044-380e57679913/go.mod h1:7bLwdEbNJW3D0pTYWzi0r8T3wOHXqG1+nyTvEDQVILU=
 github.com/beedsneeds/resilient-distributed-rideshare/services/ride v0.0.0-20260404012228-ced8cbd5f9d9 h1:mUlX+9z75JU/KWkVMsTkK6OTSGn6PoyFuyufRrsmR1c=
 github.com/beedsneeds/resilient-distributed-rideshare/services/ride v0.0.0-20260404012228-ced8cbd5f9d9/go.mod h1:Ps5GP3wbTsHzRN/AZcajkJBvsUhJiGlkdeZC8Fsb3Xo=
 github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=
