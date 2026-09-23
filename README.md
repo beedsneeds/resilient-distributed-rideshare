@@ -26,18 +26,18 @@ Stack: Go, gRPC, Postgres, Redis, Kafka\*, Docker Compose
 
 My goal was to model a subset of Uber's flow:
 - **Rider** issues ride requests over gRPC. Requests are idempotent.
-- **Ride** owns the ride lifecycle. Temporal's transfer queue: state and its outgoing event commit together, and a relay publishes to a message queue after. Also seen in Matching.
-- **Matching** consumes events from the message queue (idempotently) and assigns a driver asynchronously. Used a per-driver lock, which is something I'd want to revisit later.
+- **Ride** owns the ride lifecycle. Ride records every state change like this: state and its outgoing event commit together, and a relay publishes to a message queue after (Temporal's transfer queue). Pattern is also seen in Matching.
+- **Matching** consumes events from the message queue (idempotently) and assigns a driver. Used a per-driver lock, which is something I'd want to revisit later.
 - **Reconciler** sweeps for rides stuck mid-flight and republishes any event that turned stale.
 
 
-Each service emits events about its own domain and has its own dedicated database. Ride and Matching are loosely coupled and communicate asynchronously over a message queue. The creation of a Ride request is the [pivot transaction](https://learn.microsoft.com/en-us/azure/architecture/patterns/saga#key-concepts-in-the-saga-pattern) because the rideshare can't cancel a ride after a user makes a successful request. 
+Each service emits events about its own domain and has its own dedicated database. Ride and Matching are loosely coupled and communicate asynchronously over a message queue (Redis Streams/Kafka). The creation of a Ride request is the [pivot transaction](https://learn.microsoft.com/en-us/azure/architecture/patterns/saga#key-concepts-in-the-saga-pattern) because a rideshare shouldn't be cancelling a ride after a user makes a successful request. 
 
-I skipped parts of the flow that just repeat the patterns covered above (the Uber blog above explains it wonderfully). I also left out two functionalities: all human UX failure modes (since simulated user behavior isn't interesting) and location (too much complexity for this learning project imo). 
+I skipped parts of the flow that just repeat the patterns covered above (the Uber blog post is a really good read). I also left out two functionalities: all human UX failure modes (since simulated user behavior isn't interesting) and location (imo its too much complexity for a learning project). 
 
 ## Failure scenarios
 
-Each number in the flow marks a failure point: a place a service can crash mid-flight.
+Each number in the image above marks a failure point. This is where I inject faults mid-flight (see Setup).
 
 | # | Failure point | Scenarios | What recovers it |
 |---|---|---|---|
