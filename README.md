@@ -1,6 +1,6 @@
 # resilient-distributed-rideshare
 
-A simple rideshare backend demonstrating resilience patterns (outbox, dedup, crash-recovery and reconciler) during partial failures across microservices.
+A rideshare backend demonstrating resilience patterns (outbox, dedup, crash-recovery and reconciler) during partial failures across microservices.
 
 I started this project to build a rideshare backend, arguably the hardest system design problem out there. Instead, I got pulled into a more foundational problem: how do long-running business transactions stay correct across failures? I set out to build those underlying techniques myself, which taught me firsthand why a workflow engine like [Temporal](https://temporal.io/blog/workflow-engine-principles) exists. If you're familiar with Temporal, I built what it calls _transfer queues_, _task leases_, and _idempotent task application_.
 
